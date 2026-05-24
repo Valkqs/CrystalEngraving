@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>水晶内雕 · 立体点阵生成</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div>
+        <h1>水晶内雕 · 立体点阵</h1>
+        <p class="subtitle">双视角投影体素雕刻 — 从立方体两个方向分别呈现两张图片</p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel controls">
+        <section>
+          <h2>输入图片</h2>
+          <div class="upload-grid">
+            <label class="upload-card">
+              <span class="label">正视图（-Z 方向）</span>
+              <input type="file" id="imageFront" accept="image/*" />
+              <img id="previewFront" alt="正视图预览" />
+              <span class="placeholder">点击上传</span>
+            </label>
+            <label class="upload-card">
+              <span class="label">侧视图（-Y 方向）</span>
+              <input type="file" id="imageSide" accept="image/*" />
+              <img id="previewSide" alt="侧视图预览" />
+              <span class="placeholder">点击上传</span>
+            </label>
+          </div>
+        </section>
+
+        <section>
+          <h2>参数</h2>
+          <label class="field">
+            <span>体素分辨率 <strong id="sizeValue">192</strong></span>
+            <input type="range" id="size" min="64" max="256" step="8" value="192" />
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="detailMode" checked />
+            <span>精细模式（保留细线，推荐校徽/文字）</span>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="autoThreshold" checked />
+            <span>自动阈值（Otsu）</span>
+          </label>
+          <label class="field" id="thresholdField">
+            <span>手动阈值 <strong id="thresholdValue">128</strong></span>
+            <input type="range" id="threshold" min="0" max="255" value="128" />
+          </label>
+          <label class="field">
+            <span>形态学膨胀 <strong id="dilateValue">0</strong> px</span>
+            <input type="range" id="dilate" min="0" max="4" step="1" value="0" />
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="invert" />
+            <span>强制反转（通常不必勾选，蓝底校徽会自动识别）</span>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="alignX" checked />
+            <span>X 轴平移对齐（不新增竖条）</span>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="cleanMask" />
+            <span>去除孤立竖条噪点（精细模式建议关闭）</span>
+          </label>
+          <label class="field">
+            <span>X 重叠扩展 <strong id="overlapValue">1</strong> px</span>
+            <input type="range" id="overlapDilate" min="0" max="3" step="1" value="1" />
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="depthFaceBridge" checked />
+            <span>深度双面补全（侧视 Z 向有隙时，在深度两端补面）</span>
+          </label>
+          <label class="field">
+            <span>侧视 Z 向填隙 <strong id="closeZGapValue">2</strong> px</span>
+            <input type="range" id="closeSideZGap" min="0" max="6" step="1" value="2" />
+          </label>
+          <label class="field">
+            <span>点阵密度 <strong id="densityValue">75</strong>%</span>
+            <input type="range" id="density" min="20" max="100" step="5" value="75" />
+          </label>
+          <label class="field">
+            <span>斜向均匀化 <strong id="uniformValue">25</strong>%</span>
+            <input type="range" id="uniformStrength" min="0" max="100" step="5" value="25" />
+          </label>
+          <p class="hint-inline">蓝底校徽会自动识别反转；图片居中缩放不拉伸。精细模式 + 分辨率 192 适合浙大校徽等细节图案。</p>
+        </section>
+
+        <section>
+          <button id="generateBtn" class="primary" disabled>生成立体点阵</button>
+          <p id="status" class="status">请上传两张图片</p>
+        </section>
+
+        <section>
+          <h2>观察视角</h2>
+          <div class="view-buttons">
+            <button data-view="front">正视图</button>
+            <button data-view="side">侧视图</button>
+            <button data-view="top">右视图</button>
+            <button data-view="iso">等轴测</button>
+          </div>
+          <label class="field">
+            <span>点大小</span>
+            <input type="range" id="pointSize" min="0.02" max="0.4" step="0.01" value="0.08" />
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="showWireframe" checked />
+            <span>显示立方体边框</span>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="autoRotate" />
+            <span>自动旋转</span>
+          </label>
+        </section>
+
+        <section class="info">
+          <h2>算法说明</h2>
+          <p>
+            将正视图沿 Z 轴、侧视图沿 Y 轴拉伸后求交并补全投影；
+            再通过稀疏均匀化减少点数，<strong>正视/侧视轮廓不变</strong>，斜向视角更均匀。
+          </p>
+        </section>
+      </aside>
+
+      <div class="viewer-area">
+        <div id="canvasHost" class="canvas-host"></div>
+        <div class="stats-bar">
+          <span id="voxelCount">体素数：—</span>
+          <span id="currentView">当前视角：自由</span>
+        </div>
+      </div>
+
+      <aside class="panel projections">
+        <h2>投影校验</h2>
+        <p class="hint">生成后可对比：从对应方向看 3D 点阵的投影应与输入图片一致</p>
+        <div class="proj-grid">
+          <div>
+            <h3>正视图投影</h3>
+            <canvas id="projFront" width="160" height="160"></canvas>
+          </div>
+          <div>
+            <h3>侧视图投影</h3>
+            <canvas id="projSide" width="160" height="160"></canvas>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
