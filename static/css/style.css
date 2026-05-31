@@ -179,6 +179,27 @@ body {
   cursor: not-allowed;
 }
 
+.secondary {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid rgba(125, 180, 255, 0.45);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.secondary:hover:not(:disabled) {
+  background: rgba(125, 180, 255, 0.12);
+}
+
+.secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .hint-inline {
   font-size: 0.72rem;
   color: var(--muted);

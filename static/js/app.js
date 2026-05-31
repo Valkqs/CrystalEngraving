@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { generateFromFiles } from "./voxel.js";
+import { exportPointsToObj, exportPointsToStl } from "./stl_export.js";
 
 const canvasHost = document.getElementById("canvasHost");
 const imageFrontInput = document.getElementById("imageFront");
@@ -8,6 +9,8 @@ const imageSideInput = document.getElementById("imageSide");
 const previewFront = document.getElementById("previewFront");
 const previewSide = document.getElementById("previewSide");
 const generateBtn = document.getElementById("generateBtn");
+const exportStlBtn = document.getElementById("exportStlBtn");
+const exportObjBtn = document.getElementById("exportObjBtn");
 const statusEl = document.getElementById("status");
 const sizeInput = document.getElementById("size");
 const sizeValue = document.getElementById("sizeValue");
@@ -40,6 +43,7 @@ const projSideCanvas = document.getElementById("projSide");
 
 let frontFile = null;
 let sideFile = null;
+let latestResult = null;
 
 // --- Three.js setup ---
 const scene = new THREE.Scene();
@@ -206,6 +210,9 @@ function setupUpload(input, preview, card, onFile) {
   input.addEventListener("change", () => {
     const file = input.files[0];
     if (!file) return;
+    latestResult = null;
+    exportStlBtn.disabled = true;
+    exportObjBtn.disabled = true;
     onFile(file);
     preview.src = URL.createObjectURL(file);
     card.classList.add("has-image");
@@ -222,11 +229,61 @@ setupUpload(imageSideInput, previewSide, imageSideInput.closest(".upload-card"),
 
 function updateGenerateState() {
   generateBtn.disabled = !(frontFile && sideFile);
+  if (!latestResult) {
+    exportStlBtn.disabled = true;
+    exportObjBtn.disabled = true;
+  }
   if (frontFile && sideFile) {
     statusEl.textContent = "就绪，点击生成";
     statusEl.className = "status";
   }
 }
+
+exportStlBtn.addEventListener("click", async () => {
+  if (!latestResult?.points?.length) return;
+  exportStlBtn.disabled = true;
+  const prev = statusEl.textContent;
+  try {
+    statusEl.textContent = "正在导出 STL…";
+    await new Promise((r) => setTimeout(r, 0));
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const filename = `voxel_${latestResult.size}_${stamp}.stl`;
+    const info = exportPointsToStl(latestResult.points, filename);
+    statusEl.textContent = `STL 导出完成，三角面 ${info.triangleCount.toLocaleString()} 个`;
+    statusEl.className = "status success";
+  } catch (e) {
+    statusEl.textContent = `STL 导出失败：${e.message}`;
+    statusEl.className = "status error";
+  } finally {
+    exportStlBtn.disabled = !latestResult?.points?.length;
+    if (statusEl.className === "status" && prev) statusEl.textContent = prev;
+  }
+});
+
+exportObjBtn.addEventListener("click", async () => {
+  if (!latestResult?.points?.length) return;
+  exportObjBtn.disabled = true;
+  const prev = statusEl.textContent;
+  try {
+    statusEl.textContent = "正在导出 OBJ…";
+    await new Promise((r) => setTimeout(r, 0));
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const filename = `voxel_${latestResult.size}_${stamp}.obj`;
+    const info = exportPointsToObj(latestResult.points, filename);
+    statusEl.textContent = `OBJ 导出完成，顶点 ${info.vertexCount.toLocaleString()}，面 ${info.faceCount.toLocaleString()} 个`;
+    statusEl.className = "status success";
+  } catch (e) {
+    statusEl.textContent = `OBJ 导出失败：${e.message}`;
+    statusEl.className = "status error";
+  } finally {
+    exportObjBtn.disabled = !latestResult?.points?.length;
+    if (statusEl.className === "status" && prev) statusEl.textContent = prev;
+  }
+});
 
 sizeInput.addEventListener("input", () => {
   sizeValue.textContent = sizeInput.value;
@@ -296,6 +353,8 @@ generateBtn.addEventListener("click", async () => {
   if (!frontFile || !sideFile) return;
 
   generateBtn.disabled = true;
+  exportStlBtn.disabled = true;
+  exportObjBtn.disabled = true;
   statusEl.textContent = "正在生成…";
   statusEl.className = "status";
 
@@ -372,6 +431,9 @@ generateBtn.addEventListener("click", async () => {
     statusEl.textContent = "正在构建 3D 视图…";
     await new Promise((r) => setTimeout(r, 0));
     buildPointCloud(data.points, data.size);
+    latestResult = data;
+    exportStlBtn.disabled = !data.points?.length;
+    exportObjBtn.disabled = !data.points?.length;
     const fullLabel = data.count_full != null ? `（雕刻后 ${data.count_full.toLocaleString()} → 稀疏化 ${data.count.toLocaleString()}）` : "";
     voxelCountEl.textContent = `体素数：${data.count.toLocaleString()} / ${(data.size ** 3).toLocaleString()} ${fullLabel}`;
     drawProjection(projFrontCanvas, data.projection_front);
@@ -387,6 +449,9 @@ generateBtn.addEventListener("click", async () => {
     statusEl.className = "status success";
     currentViewEl.textContent = "当前视角：自由（可拖拽旋转）";
   } catch (e) {
+    latestResult = null;
+    exportStlBtn.disabled = true;
+    exportObjBtn.disabled = true;
     statusEl.textContent = `生成失败：${e.message}`;
     statusEl.className = "status error";
   } finally {
