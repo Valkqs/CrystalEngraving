@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>水晶内雕 · 立体点阵生成</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
   <div class="app">
@@ -39,7 +39,7 @@
           <h2>参数</h2>
           <label class="field">
             <span>体素分辨率 <strong id="sizeValue">192</strong></span>
-            <input type="range" id="size" min="64" max="256" step="8" value="192" />
+            <input type="range" id="size" min="64" max="1024" step="16" value="192" />
           </label>
           <label class="field checkbox">
             <input type="checkbox" id="detailMode" checked />
@@ -76,6 +76,10 @@
           <label class="field checkbox">
             <input type="checkbox" id="depthFaceBridge" checked />
             <span>深度双面补全（侧视 Z 向有隙时，在深度两端补面）</span>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="edgeWallWrap" checked />
+            <span>侧面四向加面（边界四面包围补点）</span>
           </label>
           <label class="field">
             <span>侧视 Z 向填隙 <strong id="closeZGapValue">2</strong> px</span>
@@ -161,6 +165,6 @@
       }
     }
   </script>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

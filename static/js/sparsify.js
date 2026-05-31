@@ -4,6 +4,8 @@
  */
 
 import {
+  applyEdgeWallWrap,
+  boundaryFaces,
   pickYForSide,
   pickZForFront,
   yAtColumn,
@@ -52,9 +54,18 @@ function repairCoverageMasks(
   colCount,
   rowCount,
   points,
-  depthFaceBridge
+  depthFaceBridge,
+  edgeWallWrap
 ) {
   const idx = (y, x, z) => y * size * size + x * size + z;
+  let fallbackYFaces = null;
+  let fallbackZFaces = null;
+  if (edgeWallWrap) {
+    const faces = boundaryFaces(front, side, size);
+    fallbackYFaces = faces.yFaces;
+    fallbackZFaces = faces.zFaces;
+  }
+
   const add = (y, x, z) => {
     if (selected[idx(y, x, z)]) return;
     selected[idx(y, x, z)] = 1;
@@ -66,7 +77,7 @@ function repairCoverageMasks(
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       if (!reqFront[y * size + x] || colCount[y * size + x] > 0) continue;
-      const z = pickZForFront(y, x, side, size, depthFaceBridge);
+      const z = pickZForFront(y, x, side, size, depthFaceBridge, fallbackZFaces);
       if (z != null) add(y, x, z);
     }
   }
@@ -74,7 +85,7 @@ function repairCoverageMasks(
   for (let z = 0; z < size; z++) {
     for (let x = 0; x < size; x++) {
       if (!reqSide[z * size + x] || rowCount[z * size + x] > 0) continue;
-      const y = pickYForSide(z, x, front, size, depthFaceBridge);
+      const y = pickYForSide(z, x, front, size, depthFaceBridge, fallbackYFaces);
       if (y != null) add(y, x, z);
     }
   }
@@ -87,7 +98,8 @@ export function sparsifyUniform(
   uniformStrength = 0.6,
   targetFront = null,
   targetSide = null,
-  depthFaceBridge = true
+  depthFaceBridge = true,
+  edgeWallWrap = true
 ) {
   density = Math.max(0.05, Math.min(1, density));
   uniformStrength = Math.max(0, Math.min(1, uniformStrength));
@@ -152,8 +164,10 @@ export function sparsifyUniform(
       colCount,
       rowCount,
       points,
-      depthFaceBridge
+      depthFaceBridge,
+      edgeWallWrap
     );
+    if (edgeWallWrap) applyEdgeWallWrap(out, front, side, size);
     return out;
   }
 
@@ -235,7 +249,8 @@ export function sparsifyUniform(
       colCount,
       rowCount,
       points,
-      depthFaceBridge
+      depthFaceBridge,
+      edgeWallWrap
     );
   }
 
@@ -290,10 +305,12 @@ export function sparsifyUniform(
       colCount,
       rowCount,
       points,
-      depthFaceBridge
+      depthFaceBridge,
+      edgeWallWrap
     );
   }
 
+  if (edgeWallWrap) applyEdgeWallWrap(selected, front, side, size);
   return selected;
 }
 

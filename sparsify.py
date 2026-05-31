@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 
 from carve_helpers import (
+    apply_edge_wall_wrap,
+    boundary_faces,
     pick_y_for_side,
     pick_z_for_front,
     y_at_column,
@@ -29,13 +31,26 @@ def _repair_coverage(
     side: np.ndarray,
     *,
     depth_face_bridge: bool = True,
+    edge_wall_wrap: bool = True,
 ) -> None:
     size = front.shape[0]
+    fallback_y_faces: np.ndarray | None = None
+    fallback_z_faces: np.ndarray | None = None
+    if edge_wall_wrap:
+        fallback_y_faces, fallback_z_faces = boundary_faces(front, side)
+
     for y in range(size):
         for x in range(size):
             if not target_front[y, x] or np.any(selected[y, x, :]):
                 continue
-            z = pick_z_for_front(y, x, side, size, depth_face_bridge)
+            z = pick_z_for_front(
+                y,
+                x,
+                side,
+                size,
+                depth_face_bridge,
+                fallback_z_faces=fallback_z_faces,
+            )
             if z is not None:
                 selected[y, x, z] = True
 
@@ -43,7 +58,14 @@ def _repair_coverage(
         for x in range(size):
             if not target_side[z, x] or np.any(selected[:, x, z]):
                 continue
-            y = pick_y_for_side(z, x, front, size, depth_face_bridge)
+            y = pick_y_for_side(
+                z,
+                x,
+                front,
+                size,
+                depth_face_bridge,
+                fallback_y_faces=fallback_y_faces,
+            )
             if y is not None:
                 selected[y, x, z] = True
 
@@ -78,6 +100,7 @@ def sparsify_uniform(
     target_front: np.ndarray | None = None,
     target_side: np.ndarray | None = None,
     depth_face_bridge: bool = True,
+    edge_wall_wrap: bool = True,
 ) -> np.ndarray:
     density = float(np.clip(density, 0.05, 1.0))
     uniform_strength = float(np.clip(uniform_strength, 0.0, 1.0))
@@ -91,8 +114,16 @@ def sparsify_uniform(
     if density >= 0.999:
         out = voxels.copy()
         _repair_coverage(
-            out, req_front, req_side, front, side, depth_face_bridge=depth_face_bridge
+            out,
+            req_front,
+            req_side,
+            front,
+            side,
+            depth_face_bridge=depth_face_bridge,
+            edge_wall_wrap=edge_wall_wrap,
         )
+        if edge_wall_wrap:
+            apply_edge_wall_wrap(out, front, side)
         return out
 
     total = int(voxels.sum())
@@ -143,7 +174,13 @@ def sparsify_uniform(
         for _, y, x, z in buckets.values():
             selected[y, x, z] = True
         _repair_coverage(
-            selected, req_front, req_side, front, side, depth_face_bridge=depth_face_bridge
+            selected,
+            req_front,
+            req_side,
+            front,
+            side,
+            depth_face_bridge=depth_face_bridge,
+            edge_wall_wrap=edge_wall_wrap,
         )
 
     target = max(int(req_front.sum() + req_side.sum()) // 2, int(total * density))
@@ -168,11 +205,25 @@ def sparsify_uniform(
         for _, y, x, z in removable[:batch]:
             selected[y, x, z] = False
         _repair_coverage(
-            selected, req_front, req_side, front, side, depth_face_bridge=depth_face_bridge
+            selected,
+            req_front,
+            req_side,
+            front,
+            side,
+            depth_face_bridge=depth_face_bridge,
+            edge_wall_wrap=edge_wall_wrap,
         )
         coords = np.argwhere(selected)
 
     _repair_coverage(
-        selected, req_front, req_side, front, side, depth_face_bridge=depth_face_bridge
+        selected,
+        req_front,
+        req_side,
+        front,
+        side,
+        depth_face_bridge=depth_face_bridge,
+        edge_wall_wrap=edge_wall_wrap,
     )
+    if edge_wall_wrap:
+        apply_edge_wall_wrap(selected, front, side)
     return selected

@@ -3,6 +3,7 @@ import {
   extractMask,
   gentleClean,
   loadImageBitmapFit,
+  loadImageBitmapPairFit,
 } from "./image_preprocess.js";
 import { carveDualCover, closeSideZGaps } from "./carve_helpers.js";
 
@@ -185,6 +186,7 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     cleanMask: doClean = false,
     overlapDilate = 1,
     depthFaceBridge = true,
+    edgeWallWrap = true,
     closeSideZGaps: closeZGaps = 2,
     density = 0.75,
     uniformStrength = 0.25,
@@ -221,7 +223,7 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     side = closeSideZGaps(side, size, gapClose);
   }
 
-  const voxels = carveDualCover(front, side, size, depthFaceBridge);
+  const voxels = carveDualCover(front, side, size, depthFaceBridge, edgeWallWrap);
 
   let countFull = 0;
   for (let i = 0; i < voxels.length; i++) countFull += voxels[i];
@@ -233,7 +235,8 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     uniformStrength,
     front,
     side,
-    depthFaceBridge
+    depthFaceBridge,
+    edgeWallWrap
   );
   const { points, projectionFront, projectionSide } = voxelsToPoints(sparse, size);
 
@@ -261,6 +264,7 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
     cleanMask = false,
     overlapDilate = 1,
     depthFaceBridge = true,
+    edgeWallWrap = true,
     closeSideZGaps: closeZGaps = 2,
     density = 0.75,
     uniformStrength = 0.25,
@@ -269,10 +273,7 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
 
   const invertUser = invert === null || invert === undefined ? null : !!invert;
 
-  const [frontImg, sideImg] = await Promise.all([
-    loadImageBitmapFit(frontFile, size),
-    loadImageBitmapFit(sideFile, size),
-  ]);
+  const [frontImg, sideImg] = await loadImageBitmapPairFit(frontFile, sideFile, size);
   const frontMask = extractMask(frontImg, threshold, invertUser, autoThreshold);
   const sideMask = extractMask(sideImg, threshold, invertUser, autoThreshold);
   return generateVoxels(frontMask, sideMask, size, {
@@ -283,6 +284,7 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
     density,
     uniformStrength,
     depthFaceBridge,
+    edgeWallWrap,
     closeSideZGaps: closeZGaps,
     detailMode,
   });

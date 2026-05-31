@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from carve_helpers import carve_dual_cover, close_side_z_gaps as fill_side_z_gaps
-from image_preprocess import extract_mask, gentle_clean, load_grayscale_fit
+from image_preprocess import extract_mask, gentle_clean, load_grayscale_pair_fit
 from sparsify import sparsify_uniform
 
 
@@ -83,12 +83,13 @@ def generate_voxels(
     clean_mask: bool = False,
     overlap_dilate: int = 1,
     depth_face_bridge: bool = True,
+    edge_wall_wrap: bool = True,
     close_side_z_gaps: int = 2,
     density: float = 0.75,
     uniform_strength: float = 0.25,
     detail_mode: bool = True,
 ) -> VoxelResult:
-    size = int(np.clip(size, 16, 512))
+    size = int(np.clip(size, 16, 1024))
     dilate = int(np.clip(dilate, 0, 5))
 
     if detail_mode:
@@ -96,8 +97,9 @@ def generate_voxels(
         if dilate == 1:
             dilate = 0
 
-    front_gray = load_grayscale_fit(image_front_bytes, size)
-    side_gray = load_grayscale_fit(image_side_bytes, size)
+    front_gray, side_gray = load_grayscale_pair_fit(
+        image_front_bytes, image_side_bytes, size
+    )
 
     user_invert = None if invert is None else bool(invert)
     front, t_front, inv_front = extract_mask(
@@ -125,7 +127,10 @@ def generate_voxels(
         side = fill_side_z_gaps(side, gap_close)
 
     voxels = carve_dual_cover(
-        front, side, depth_face_bridge=depth_face_bridge
+        front,
+        side,
+        depth_face_bridge=depth_face_bridge,
+        edge_wall_wrap=edge_wall_wrap,
     )
     count_full = int(voxels.sum())
 
@@ -136,6 +141,7 @@ def generate_voxels(
         target_front=front,
         target_side=side,
         depth_face_bridge=depth_face_bridge,
+        edge_wall_wrap=edge_wall_wrap,
     )
 
     ys, xs, zs = np.where(voxels)

@@ -21,6 +21,7 @@ const alignXInput = document.getElementById("alignX");
 const cleanMaskInput = document.getElementById("cleanMask");
 const overlapDilateInput = document.getElementById("overlapDilate");
 const depthFaceBridgeInput = document.getElementById("depthFaceBridge");
+const edgeWallWrapInput = document.getElementById("edgeWallWrap");
 const closeSideZGapInput = document.getElementById("closeSideZGap");
 const detailModeInput = document.getElementById("detailMode");
 const densityInput = document.getElementById("density");
@@ -73,10 +74,22 @@ let pointCloud = null;
 let wireframe = null;
 let cubeSize = 64;
 
+function updateCameraClipping(size) {
+  camera.near = Math.max(0.1, size * 0.001);
+  camera.far = Math.max(2000, size * 12);
+  camera.updateProjectionMatrix();
+}
+
+function renderPointSize(size) {
+  const base = parseFloat(pointSizeInput.value) || 0.08;
+  return Math.max(0.02, base * (size / 192));
+}
+
 function centerCamera(size) {
   const half = size / 2;
   controls.target.set(half, half, half);
   camera.position.set(half + size * 1.4, half + size * 0.9, half + size * 1.6);
+  updateCameraClipping(size);
   controls.update();
 }
 
@@ -129,7 +142,7 @@ function buildPointCloud(points, size) {
 
   const material = new THREE.PointsMaterial({
     color: 0x88ccff,
-    size: parseFloat(pointSizeInput.value) || Math.max(0.04, size * 0.0006),
+    size: renderPointSize(size),
     sizeAttenuation: true,
     transparent: true,
     opacity: 0.92,
@@ -158,6 +171,7 @@ function setCameraView(viewName) {
   if (!v) return;
 
   camera.position.set(...v.pos);
+  updateCameraClipping(cubeSize);
   controls.target.copy(target);
   controls.update();
   currentViewEl.textContent = `当前视角：${v.label}`;
@@ -264,7 +278,7 @@ uniformStrengthInput.addEventListener("input", () => {
 
 pointSizeInput.addEventListener("input", () => {
   if (pointCloud) {
-    pointCloud.material.size = parseFloat(pointSizeInput.value);
+    pointCloud.material.size = renderPointSize(cubeSize);
   }
 });
 
@@ -294,6 +308,7 @@ generateBtn.addEventListener("click", async () => {
   const cleanMask = cleanMaskInput.checked;
   const overlapDilate = parseInt(overlapDilateInput?.value || "1", 10);
   const depthFaceBridge = depthFaceBridgeInput?.checked !== false;
+  const edgeWallWrap = edgeWallWrapInput?.checked !== false;
   const closeSideZGaps = parseInt(closeSideZGapInput?.value || "2", 10);
   const density = parseInt(densityInput.value, 10) / 100;
   const uniformStrength = parseInt(uniformStrengthInput.value, 10) / 100;
@@ -311,6 +326,7 @@ generateBtn.addEventListener("click", async () => {
       cleanMask,
       overlapDilate,
       depthFaceBridge,
+      edgeWallWrap,
       closeSideZGaps,
       density,
       uniformStrength,
@@ -333,6 +349,7 @@ generateBtn.addEventListener("click", async () => {
       form.append("clean_mask", cleanMask ? "true" : "false");
       form.append("overlap_dilate", String(overlapDilate));
       form.append("depth_face_bridge", depthFaceBridge ? "true" : "false");
+      form.append("edge_wall_wrap", edgeWallWrap ? "true" : "false");
       form.append("close_side_z_gaps", String(closeSideZGaps));
       form.append("density", String(density));
       form.append("uniform_strength", String(uniformStrength));
