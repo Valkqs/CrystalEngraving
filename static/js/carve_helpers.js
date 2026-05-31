@@ -135,13 +135,20 @@ export function zPool(side, size, x, depthFaceBridge) {
   return strict;
 }
 
-export function carveDualCover(front, side, size, depthFaceBridge = true, edgeWallWrap = true) {
+export function carveDualCover(
+  front,
+  side,
+  size,
+  depthFaceBridge = true,
+  edgeStripFill = true,
+  edgeWallWrap = true
+) {
   const voxels = new Uint8Array(size * size * size);
   const idx = (y, x, z) => y * size * size + x * size + z;
   let fallbackYFaces = null;
   let fallbackZFaces = null;
 
-  if (edgeWallWrap) {
+  if (edgeStripFill || edgeWallWrap) {
     const faces = boundaryFaces(front, side, size);
     fallbackYFaces = faces.yFaces;
     fallbackZFaces = faces.zFaces;

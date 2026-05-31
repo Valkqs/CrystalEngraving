@@ -139,6 +139,7 @@ def carve_dual_cover(
     side: np.ndarray,
     *,
     depth_face_bridge: bool = True,
+    edge_strip_fill: bool = True,
     edge_wall_wrap: bool = True,
 ) -> np.ndarray:
     """
@@ -149,7 +150,7 @@ def carve_dual_cover(
     voxels = front[:, :, np.newaxis] & side.T[np.newaxis, :, :]
     fallback_y_faces: np.ndarray | None = None
     fallback_z_faces: np.ndarray | None = None
-    if edge_wall_wrap:
+    if edge_strip_fill or edge_wall_wrap:
         fallback_y_faces, fallback_z_faces = boundary_faces(front, side)
 
     for y in range(size):

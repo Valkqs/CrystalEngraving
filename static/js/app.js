@@ -21,6 +21,7 @@ const alignXInput = document.getElementById("alignX");
 const cleanMaskInput = document.getElementById("cleanMask");
 const overlapDilateInput = document.getElementById("overlapDilate");
 const depthFaceBridgeInput = document.getElementById("depthFaceBridge");
+const edgeStripFillInput = document.getElementById("edgeStripFill");
 const edgeWallWrapInput = document.getElementById("edgeWallWrap");
 const closeSideZGapInput = document.getElementById("closeSideZGap");
 const detailModeInput = document.getElementById("detailMode");
@@ -308,6 +309,7 @@ generateBtn.addEventListener("click", async () => {
   const cleanMask = cleanMaskInput.checked;
   const overlapDilate = parseInt(overlapDilateInput?.value || "1", 10);
   const depthFaceBridge = depthFaceBridgeInput?.checked !== false;
+  const edgeStripFill = edgeStripFillInput?.checked !== false;
   const edgeWallWrap = edgeWallWrapInput?.checked !== false;
   const closeSideZGaps = parseInt(closeSideZGapInput?.value || "2", 10);
   const density = parseInt(densityInput.value, 10) / 100;
@@ -326,6 +328,7 @@ generateBtn.addEventListener("click", async () => {
       cleanMask,
       overlapDilate,
       depthFaceBridge,
+      edgeStripFill,
       edgeWallWrap,
       closeSideZGaps,
       density,
@@ -349,6 +352,7 @@ generateBtn.addEventListener("click", async () => {
       form.append("clean_mask", cleanMask ? "true" : "false");
       form.append("overlap_dilate", String(overlapDilate));
       form.append("depth_face_bridge", depthFaceBridge ? "true" : "false");
+      form.append("edge_strip_fill", edgeStripFill ? "true" : "false");
       form.append("edge_wall_wrap", edgeWallWrap ? "true" : "false");
       form.append("close_side_z_gaps", String(closeSideZGaps));
       form.append("density", String(density));

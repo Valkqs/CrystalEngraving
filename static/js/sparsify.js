@@ -55,12 +55,13 @@ function repairCoverageMasks(
   rowCount,
   points,
   depthFaceBridge,
+  edgeStripFill,
   edgeWallWrap
 ) {
   const idx = (y, x, z) => y * size * size + x * size + z;
   let fallbackYFaces = null;
   let fallbackZFaces = null;
-  if (edgeWallWrap) {
+  if (edgeStripFill || edgeWallWrap) {
     const faces = boundaryFaces(front, side, size);
     fallbackYFaces = faces.yFaces;
     fallbackZFaces = faces.zFaces;
@@ -99,6 +100,7 @@ export function sparsifyUniform(
   targetFront = null,
   targetSide = null,
   depthFaceBridge = true,
+  edgeStripFill = true,
   edgeWallWrap = true
 ) {
   density = Math.max(0.05, Math.min(1, density));
@@ -165,6 +167,7 @@ export function sparsifyUniform(
       rowCount,
       points,
       depthFaceBridge,
+      edgeStripFill,
       edgeWallWrap
     );
     if (edgeWallWrap) applyEdgeWallWrap(out, front, side, size);
@@ -250,6 +253,7 @@ export function sparsifyUniform(
       rowCount,
       points,
       depthFaceBridge,
+      edgeStripFill,
       edgeWallWrap
     );
   }
@@ -306,6 +310,7 @@ export function sparsifyUniform(
       rowCount,
       points,
       depthFaceBridge,
+      edgeStripFill,
       edgeWallWrap
     );
   }

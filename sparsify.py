@@ -31,12 +31,13 @@ def _repair_coverage(
     side: np.ndarray,
     *,
     depth_face_bridge: bool = True,
+    edge_strip_fill: bool = True,
     edge_wall_wrap: bool = True,
 ) -> None:
     size = front.shape[0]
     fallback_y_faces: np.ndarray | None = None
     fallback_z_faces: np.ndarray | None = None
-    if edge_wall_wrap:
+    if edge_strip_fill or edge_wall_wrap:
         fallback_y_faces, fallback_z_faces = boundary_faces(front, side)
 
     for y in range(size):
@@ -100,6 +101,7 @@ def sparsify_uniform(
     target_front: np.ndarray | None = None,
     target_side: np.ndarray | None = None,
     depth_face_bridge: bool = True,
+    edge_strip_fill: bool = True,
     edge_wall_wrap: bool = True,
 ) -> np.ndarray:
     density = float(np.clip(density, 0.05, 1.0))
@@ -120,6 +122,7 @@ def sparsify_uniform(
             front,
             side,
             depth_face_bridge=depth_face_bridge,
+            edge_strip_fill=edge_strip_fill,
             edge_wall_wrap=edge_wall_wrap,
         )
         if edge_wall_wrap:
@@ -180,6 +183,7 @@ def sparsify_uniform(
             front,
             side,
             depth_face_bridge=depth_face_bridge,
+            edge_strip_fill=edge_strip_fill,
             edge_wall_wrap=edge_wall_wrap,
         )
 
@@ -211,6 +215,7 @@ def sparsify_uniform(
             front,
             side,
             depth_face_bridge=depth_face_bridge,
+            edge_strip_fill=edge_strip_fill,
             edge_wall_wrap=edge_wall_wrap,
         )
         coords = np.argwhere(selected)
@@ -222,6 +227,7 @@ def sparsify_uniform(
         front,
         side,
         depth_face_bridge=depth_face_bridge,
+        edge_strip_fill=edge_strip_fill,
         edge_wall_wrap=edge_wall_wrap,
     )
     if edge_wall_wrap:

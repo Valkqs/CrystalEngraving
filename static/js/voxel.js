@@ -186,6 +186,7 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     cleanMask: doClean = false,
     overlapDilate = 1,
     depthFaceBridge = true,
+    edgeStripFill = true,
     edgeWallWrap = true,
     closeSideZGaps: closeZGaps = 2,
     density = 0.75,
@@ -223,7 +224,7 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     side = closeSideZGaps(side, size, gapClose);
   }
 
-  const voxels = carveDualCover(front, side, size, depthFaceBridge, edgeWallWrap);
+  const voxels = carveDualCover(front, side, size, depthFaceBridge, edgeStripFill, edgeWallWrap);
 
   let countFull = 0;
   for (let i = 0; i < voxels.length; i++) countFull += voxels[i];
@@ -236,6 +237,7 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     front,
     side,
     depthFaceBridge,
+    edgeStripFill,
     edgeWallWrap
   );
   const { points, projectionFront, projectionSide } = voxelsToPoints(sparse, size);
@@ -264,6 +266,7 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
     cleanMask = false,
     overlapDilate = 1,
     depthFaceBridge = true,
+    edgeStripFill = true,
     edgeWallWrap = true,
     closeSideZGaps: closeZGaps = 2,
     density = 0.75,
@@ -284,6 +287,7 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
     density,
     uniformStrength,
     depthFaceBridge,
+    edgeStripFill,
     edgeWallWrap,
     closeSideZGaps: closeZGaps,
     detailMode,

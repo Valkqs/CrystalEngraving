@@ -172,6 +172,31 @@ def test_edge_wall_wrap_fills_front_when_side_column_missing():
     assert ps[4, 12] and ps[19, 12]
 
 
+def test_edge_strip_fill_fills_stripe_without_full_wall():
+    size = 24
+    front = np.zeros((size, size), dtype=bool)
+    front[6:18, 12] = True
+    side = np.zeros((size, size), dtype=bool)
+    side[4, 11] = True
+    side[19, 11] = True
+
+    v = carve_dual_cover(
+        front,
+        side,
+        depth_face_bridge=True,
+        edge_strip_fill=True,
+        edge_wall_wrap=False,
+    )
+    pf = projection_front(v)
+    ps = projection_side(v)
+    ys, xs = np.where(front)
+
+    assert np.all(pf[front])
+    assert ps[4, 12] and ps[19, 12]
+    # No full z face fill when wall-wrap is disabled.
+    assert not np.all(v[ys, xs, 4])
+
+
 def test_close_side_z_gaps():
     side = np.zeros((16, 16), dtype=bool)
     side[4, 8] = True
@@ -200,6 +225,7 @@ if __name__ == "__main__":
     test_load_grayscale_pair_fit_aligns_shared_width()
     test_depth_face_bridge_uses_z_faces()
     test_edge_wall_wrap_fills_front_when_side_column_missing()
+    test_edge_strip_fill_fills_stripe_without_full_wall()
     test_close_side_z_gaps()
     test_gentle_clean_keeps_ring()
     print("All tests passed.")

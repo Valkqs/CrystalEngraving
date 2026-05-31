@@ -83,6 +83,7 @@ def generate_voxels(
     clean_mask: bool = False,
     overlap_dilate: int = 1,
     depth_face_bridge: bool = True,
+    edge_strip_fill: bool = True,
     edge_wall_wrap: bool = True,
     close_side_z_gaps: int = 2,
     density: float = 0.75,
@@ -130,6 +131,7 @@ def generate_voxels(
         front,
         side,
         depth_face_bridge=depth_face_bridge,
+        edge_strip_fill=edge_strip_fill,
         edge_wall_wrap=edge_wall_wrap,
     )
     count_full = int(voxels.sum())
@@ -141,6 +143,7 @@ def generate_voxels(
         target_front=front,
         target_side=side,
         depth_face_bridge=depth_face_bridge,
+        edge_strip_fill=edge_strip_fill,
         edge_wall_wrap=edge_wall_wrap,
     )
 
