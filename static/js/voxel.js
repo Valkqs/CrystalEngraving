@@ -189,6 +189,7 @@ export function generateVoxels(frontMask, sideMask, size, options = {}) {
     density = 0.75,
     uniformStrength = 0.25,
     detailMode = true,
+    optimize = false,  // used by backend API; browser fallback ignores this
   } = options;
   let front = frontMask.maskClosed || frontMask.mask;
   let side = sideMask.maskClosed || sideMask.mask;
@@ -265,6 +266,8 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
     density = 0.75,
     uniformStrength = 0.25,
     detailMode = true,
+    optimize = false,
+    chaosPenalty = 0.5,
   } = options;
 
   const invertUser = invert === null || invert === undefined ? null : !!invert;
@@ -285,5 +288,7 @@ export async function generateFromFiles(frontFile, sideFile, size, options = {})
     depthFaceBridge,
     closeSideZGaps: closeZGaps,
     detailMode,
+    optimize,
+    chaosPenalty,
   });
 }

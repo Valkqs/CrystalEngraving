@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { generateFromFiles } from "./voxel.js";
 
 const canvasHost = document.getElementById("canvasHost");
 const imageFrontInput = document.getElementById("imageFront");
@@ -28,13 +27,30 @@ const densityValue = document.getElementById("densityValue");
 const uniformStrengthInput = document.getElementById("uniformStrength");
 const uniformValue = document.getElementById("uniformValue");
 const invertInput = document.getElementById("invert");
+const chaosPenaltyInput = document.getElementById("chaosPenalty");
+const chaosPenaltyValue = document.getElementById("chaosPenaltyValue");
+const minF1Input = document.getElementById("minF1");
+const minF1Value = document.getElementById("minF1Value");
+const saStepsInput = document.getElementById("saSteps");
+const saStepsValue = document.getElementById("saStepsValue");
+const weightVolumeInput = document.getElementById("weightVolume");
+const weightVolumeValue = document.getElementById("weightVolumeValue");
+const rngSeedInput = document.getElementById("rngSeed");
+const rngSeedValue = document.getElementById("rngSeedValue");
 const pointSizeInput = document.getElementById("pointSize");
 const showWireframeInput = document.getElementById("showWireframe");
 const autoRotateInput = document.getElementById("autoRotate");
 const voxelCountEl = document.getElementById("voxelCount");
+const f1ScoreEl = document.getElementById("f1Score");
 const currentViewEl = document.getElementById("currentView");
 const projFrontCanvas = document.getElementById("projFront");
 const projSideCanvas = document.getElementById("projSide");
+const maskFrontCanvas = document.getElementById("maskFront");
+const maskSideCanvas = document.getElementById("maskSide");
+const thresholdSummaryEl = document.getElementById("thresholdSummary");
+const diagModeEl = document.getElementById("diagMode");
+const diagFrontEl = document.getElementById("diagFront");
+const diagSideEl = document.getElementById("diagSide");
 
 let frontFile = null;
 let sideFile = null;
@@ -114,8 +130,10 @@ updateWireframe(cubeSize, true);
 function buildPointCloud(points, size) {
   clearPointCloud();
   cubeSize = size;
+  updateWireframe(size, showWireframeInput.checked);
+  centerCamera(size);
 
-  if (!points.length) return;
+  if (!Array.isArray(points) || !points.length) return;
 
   const positions = new Float32Array(points.length * 3);
   for (let i = 0; i < points.length; i++) {
@@ -169,6 +187,11 @@ document.querySelectorAll("[data-view]").forEach((btn) => {
 
 function drawProjection(canvas, matrix) {
   const ctx = canvas.getContext("2d");
+  if (!Array.isArray(matrix) || !matrix.length) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+
   const n = matrix.length;
   canvas.width = n;
   canvas.height = n;
@@ -185,6 +208,23 @@ function drawProjection(canvas, matrix) {
     }
   }
   ctx.putImageData(imageData, 0, 0);
+}
+
+function formatThresholdDetail(label, threshold, invert) {
+  if (threshold == null) return `${label}：—`;
+  const fg = invert ? "深色为实体" : "浅色为实体";
+  return `${label}：阈值 ${threshold} · ${fg}`;
+}
+
+function updateThresholdDiagnostics(data, autoThreshold) {
+  const mode = autoThreshold ? "自动阈值 Otsu" : "手动阈值";
+  const solver = data.solve_mode === "backend_sa" ? "后端模拟退火" : "后端未连接";
+  const frontText = formatThresholdDetail("正视", data.threshold_front, data.invert_front);
+  const sideText = formatThresholdDetail("侧视", data.threshold_side, data.invert_side);
+  diagModeEl.textContent = solver;
+  diagFrontEl.textContent = frontText;
+  diagSideEl.textContent = sideText;
+  thresholdSummaryEl.textContent = `${mode}｜${solver}：${frontText}；${sideText}`;
 }
 
 function setupUpload(input, preview, card, onFile) {
@@ -204,6 +244,53 @@ setupUpload(imageFrontInput, previewFront, imageFrontInput.closest(".upload-card
 setupUpload(imageSideInput, previewSide, imageSideInput.closest(".upload-card"), (f) => {
   sideFile = f;
 });
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollJobUntilDone(jobId, timeoutMs = 60 * 60 * 1000) {
+  const startedAt = Date.now();
+
+  while (true) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("后端生成超时（已等待 1 小时），请降低分辨率或减少模拟退火迭代数后重试");
+    }
+
+    const res = await fetch(`/api/generate/${jobId}`);
+    if (!res.ok) {
+      throw new Error(`读取生成进度失败 (${res.status})`);
+    }
+
+    const info = await res.json();
+    const percent = Math.max(0, Math.min(100, Math.round((info.progress || 0) * 100)));
+    const detail = info.detail || {};
+    let extra = "";
+
+    if (detail.step != null && detail.max_steps != null) {
+      extra += ` · SA ${detail.step}/${detail.max_steps}`;
+    }
+    if (detail.best_f1 != null) {
+      extra += ` · 最佳F1 ${(detail.best_f1 * 100).toFixed(1)}%`;
+    }
+    if (detail.best_count != null) {
+      extra += ` · 体素 ${Number(detail.best_count).toLocaleString()}`;
+    }
+
+    statusEl.textContent = `[后端模拟退火] ${percent}% · ${info.stage || "生成中"}${extra}`;
+    statusEl.className = "status";
+    diagModeEl.textContent = "后端模拟退火";
+
+    if (info.status === "completed") {
+      return;
+    }
+    if (info.status === "failed") {
+      throw new Error(info.error || "后端生成失败");
+    }
+
+    await sleep(800);
+  }
+}
 
 function updateGenerateState() {
   generateBtn.disabled = !(frontFile && sideFile);
@@ -258,6 +345,23 @@ closeSideZGapInput?.addEventListener("input", () => {
   const el = document.getElementById("closeZGapValue");
   if (el && closeSideZGapInput) el.textContent = closeSideZGapInput.value;
 });
+
+chaosPenaltyInput.addEventListener("input", () => {
+  chaosPenaltyValue.textContent = chaosPenaltyInput.value;
+});
+minF1Input.addEventListener("input", () => {
+  minF1Value.textContent = minF1Input.value;
+});
+saStepsInput.addEventListener("input", () => {
+  saStepsValue.textContent = saStepsInput.value;
+});
+weightVolumeInput.addEventListener("input", () => {
+  weightVolumeValue.textContent = weightVolumeInput.value;
+});
+rngSeedInput.addEventListener("input", () => {
+  rngSeedValue.textContent = rngSeedInput.value;
+});
+
 uniformStrengthInput.addEventListener("input", () => {
   uniformValue.textContent = uniformStrengthInput.value;
 });
@@ -281,7 +385,7 @@ generateBtn.addEventListener("click", async () => {
   if (!frontFile || !sideFile) return;
 
   generateBtn.disabled = true;
-  statusEl.textContent = "正在生成…";
+  statusEl.textContent = "正在提交后端任务…";
   statusEl.className = "status";
 
   const size = parseInt(sizeInput.value, 10);
@@ -297,55 +401,65 @@ generateBtn.addEventListener("click", async () => {
   const closeSideZGaps = parseInt(closeSideZGapInput?.value || "2", 10);
   const density = parseInt(densityInput.value, 10) / 100;
   const uniformStrength = parseInt(uniformStrengthInput.value, 10) / 100;
+  const optimize = true;
+  const chaosPenalty = parseInt(chaosPenaltyInput.value, 10) / 100;
+  const minF1 = parseInt(minF1Input.value, 10) / 100;
+  const saSteps = parseInt(saStepsInput.value, 10);
+  const weightVolume = parseInt(weightVolumeInput.value, 10) / 100;
+  const rngSeed = parseInt(rngSeedInput.value, 10);
 
   await new Promise((r) => setTimeout(r, 0));
 
   try {
-    let data;
-    const genOptions = {
-      threshold,
-      invert,
-      autoThreshold,
-      dilate,
-      alignX,
-      cleanMask,
-      overlapDilate,
-      depthFaceBridge,
-      closeSideZGaps,
-      density,
-      uniformStrength,
-      detailMode,
-    };
+    const form = new FormData();
+    form.append("image_front", frontFile);
+    form.append("image_side", sideFile);
+    form.append("size", String(size));
+    form.append("threshold", autoThreshold ? "" : String(threshold));
+    form.append("invert", invert === true ? "true" : invert === false ? "false" : "");
+    form.append("detail_mode", detailMode ? "true" : "false");
+    form.append("auto_threshold", autoThreshold ? "true" : "false");
+    form.append("dilate", String(dilate));
+    form.append("align_x", alignX ? "true" : "false");
+    form.append("clean_mask", cleanMask ? "true" : "false");
+    form.append("overlap_dilate", String(overlapDilate));
+    form.append("depth_face_bridge", depthFaceBridge ? "true" : "false");
+    form.append("close_side_z_gaps", String(closeSideZGaps));
+    form.append("density", String(density));
+    form.append("uniform_strength", String(uniformStrength));
+    form.append("optimize", optimize ? "true" : "false");
+    form.append("chaos_penalty", String(chaosPenalty));
+    form.append("min_f1", String(minF1));
+    form.append("sa_steps", String(saSteps));
+    form.append("weight_volume", String(weightVolume));
+    form.append("rng_seed", String(rngSeed));
 
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 1500);
-      const form = new FormData();
-      form.append("image_front", frontFile);
-      form.append("image_side", sideFile);
-      form.append("size", String(size));
-      form.append("threshold", autoThreshold ? "" : String(threshold));
-      form.append("invert", invert === true ? "true" : invert === false ? "false" : "");
-      form.append("detail_mode", detailMode ? "true" : "false");
-      form.append("auto_threshold", autoThreshold ? "true" : "false");
-      form.append("dilate", String(dilate));
-      form.append("align_x", alignX ? "true" : "false");
-      form.append("clean_mask", cleanMask ? "true" : "false");
-      form.append("overlap_dilate", String(overlapDilate));
-      form.append("depth_face_bridge", depthFaceBridge ? "true" : "false");
-      form.append("close_side_z_gaps", String(closeSideZGaps));
-      form.append("density", String(density));
-      form.append("uniform_strength", String(uniformStrength));
-      const res = await fetch("/api/generate", { method: "POST", body: form, signal: ctrl.signal });
-      clearTimeout(timer);
-      if (res.ok) data = await res.json();
-    } catch {
-      /* 无后端或超时：使用浏览器本地计算 */
+    const submitRes = await fetch("/api/generate", { method: "POST", body: form });
+    if (!submitRes.ok) {
+      throw new Error(`后端任务提交失败 (${submitRes.status})`);
     }
-    if (!data) {
-      statusEl.textContent = "正在计算体素…";
-      await new Promise((r) => setTimeout(r, 0));
-      data = await generateFromFiles(frontFile, sideFile, size, genOptions);
+
+    const submitData = await submitRes.json();
+    const jobId = submitData.job_id;
+    if (!jobId) {
+      throw new Error("后端未返回任务 ID");
+    }
+
+    await pollJobUntilDone(jobId, 60 * 60 * 1000);
+
+    const resultRes = await fetch(`/api/generate/${jobId}/result`);
+    if (!resultRes.ok) {
+      throw new Error(`读取生成结果失败 (${resultRes.status})`);
+    }
+
+    const data = await resultRes.json();
+    data.solve_mode = "backend_sa";
+
+    if (!Array.isArray(data.points)) {
+      throw new Error("后端结果缺少 points 数据");
+    }
+    if (!Array.isArray(data.projection_front) || !Array.isArray(data.projection_side)) {
+      throw new Error("后端结果缺少 projection 数据");
     }
 
     statusEl.textContent = "正在构建 3D 视图…";
@@ -353,21 +467,42 @@ generateBtn.addEventListener("click", async () => {
     buildPointCloud(data.points, data.size);
     const fullLabel = data.count_full != null ? `（雕刻后 ${data.count_full.toLocaleString()} → 稀疏化 ${data.count.toLocaleString()}）` : "";
     voxelCountEl.textContent = `体素数：${data.count.toLocaleString()} / ${(data.size ** 3).toLocaleString()} ${fullLabel}`;
+
+    if (data.f1_total != null) {
+      f1ScoreEl.style.display = "";
+      const f1 = (data.f1_total * 100).toFixed(1);
+      const f1f = (data.f1_front * 100).toFixed(1);
+      const f1s = (data.f1_side * 100).toFixed(1);
+      const chaos = data.chaos != null ? ` 混乱度=${(data.chaos * 100).toFixed(1)}%` : "";
+      const obj = data.objective != null ? ` obj=${(data.objective * 100).toFixed(1)}%` : "";
+      const badge = data.f1_total >= 0.999 ? "✓" : data.f1_total >= 0.9 ? "△" : "✗";
+      f1ScoreEl.textContent = `${badge} F1=${f1}%（正视${f1f}% / 侧视${f1s}%）${obj}${chaos}`;
+    } else {
+      f1ScoreEl.style.display = "none";
+    }
+
+    if (data.mask_front) drawProjection(maskFrontCanvas, data.mask_front);
+    if (data.mask_side) drawProjection(maskSideCanvas, data.mask_side);
+    updateThresholdDiagnostics(data, autoThreshold);
     drawProjection(projFrontCanvas, data.projection_front);
     drawProjection(projSideCanvas, data.projection_side);
 
     const tInfo =
       data.threshold_front != null
         ? `（阈值: 正 ${data.threshold_front} / 侧 ${data.threshold_side}${
-            data.invert_front != null ? `，自动${data.invert_front ? "深色" : "浅色"}为实体` : ""
+            data.invert_front != null ? `，正视${data.invert_front ? "深色" : "浅色"}为实体` : ""
+          }${
+            data.invert_side != null ? `，侧视${data.invert_side ? "深色" : "浅色"}为实体` : ""
           }）`
         : "";
-    statusEl.textContent = `生成完成，共 ${data.count.toLocaleString()} 个体素 ${tInfo}`;
+    statusEl.textContent = `[后端模拟退火] 生成完成，共 ${data.count.toLocaleString()} 个体素 ${tInfo}`.trim();
     statusEl.className = "status success";
     currentViewEl.textContent = "当前视角：自由（可拖拽旋转）";
   } catch (e) {
-    statusEl.textContent = `生成失败：${e.message}`;
+    const message = e?.message || "请先启动 server.py 后端";
+    statusEl.textContent = `生成失败：${message}`;
     statusEl.className = "status error";
+    diagModeEl.textContent = "后端未连接";
   } finally {
     generateBtn.disabled = !(frontFile && sideFile);
   }

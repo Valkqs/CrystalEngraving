@@ -1,6 +1,6 @@
 """High-quality 2D mask extraction for logo / fine artwork."""
 
-from __future__ import annotations
+from typing import Optional, Tuple
 
 import io
 
@@ -14,7 +14,7 @@ def load_grayscale_fit(data: bytes, size: int) -> np.ndarray:
     w, h = img.size
     scale = min(size / w, size / h)
     nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-    img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    img = img.resize((nw, nh), Image.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (255, 255, 255, 255))
     ox = (size - nw) // 2
     oy = (size - nh) // 2
@@ -63,11 +63,11 @@ def otsu_threshold(arr: np.ndarray) -> int:
 
 def extract_mask(
     gray: np.ndarray,
-    threshold: int | None = None,
-    invert: bool | None = None,
+    threshold: Optional[int] = None,
+    invert: Optional[bool] = None,
     *,
     denoise: bool = True,
-) -> tuple[np.ndarray, int, bool]:
+) -> Tuple[np.ndarray, int, bool]:
     """Binarize with optional light denoise (preserves thin strokes)."""
     work = gray
     if denoise:

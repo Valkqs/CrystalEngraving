@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>水晶内雕 · 立体点阵生成</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
   <div class="app">
@@ -89,7 +89,27 @@
             <span>斜向均匀化 <strong id="uniformValue">25</strong>%</span>
             <input type="range" id="uniformStrength" min="0" max="100" step="5" value="25" />
           </label>
-          <p class="hint-inline">蓝底校徽会自动识别反转；图片居中缩放不拉伸。精细模式 + 分辨率 192 适合浙大校徽等细节图案。</p>
+          <label class="field" id="chaosPenaltyField">
+            <span>混乱度惩罚强度 <strong id="chaosPenaltyValue">50</strong>%</span>
+            <input type="range" id="chaosPenalty" min="0" max="100" step="5" value="50" />
+          </label>
+          <label class="field" id="minF1Field">
+            <span>最低 F1 下限 <strong id="minF1Value">72</strong>%</span>
+            <input type="range" id="minF1" min="50" max="99" step="1" value="72" />
+          </label>
+          <label class="field" id="saStepsField">
+            <span>模拟退火迭代数 <strong id="saStepsValue">12000</strong></span>
+            <input type="range" id="saSteps" min="1000" max="30000" step="500" value="12000" />
+          </label>
+          <label class="field" id="weightVolumeField">
+            <span>体积惩罚权重 <strong id="weightVolumeValue">10</strong>%</span>
+            <input type="range" id="weightVolume" min="0" max="100" step="5" value="10" />
+          </label>
+          <label class="field" id="rngSeedField">
+            <span>随机种子 <strong id="rngSeedValue">42</strong></span>
+            <input type="range" id="rngSeed" min="0" max="200" step="1" value="42" />
+          </label>
+          <p class="hint-inline">蓝底校徽会自动识别反转；图片居中缩放不拉伸。默认使用模拟退火搜索 3D 点阵；精细模式 + 分辨率 192 适合浙大校徽等细节图案。</p>
         </section>
 
         <section>
@@ -132,6 +152,7 @@
         <div id="canvasHost" class="canvas-host"></div>
         <div class="stats-bar">
           <span id="voxelCount">体素数：—</span>
+          <span id="f1Score" style="display:none">F1：—</span>
           <span id="currentView">当前视角：自由</span>
         </div>
       </div>
@@ -139,7 +160,35 @@
       <aside class="panel projections">
         <h2>投影校验</h2>
         <p class="hint">生成后可对比：从对应方向看 3D 点阵的投影应与输入图片一致</p>
+        <div class="diagnostics" id="thresholdDiagnostics">
+          <div class="diag-card">
+            <h3>阈值诊断</h3>
+            <p id="thresholdSummary" class="diag-summary">生成后将在这里显示 front / side 实际阈值、自动反转判断，以及是否已连接后端模拟退火。</p>
+            <div class="diag-grid">
+              <div class="diag-item">
+                <span class="diag-label">生成模式</span>
+                <span id="diagMode">—</span>
+              </div>
+              <div class="diag-item">
+                <span class="diag-label">正视图</span>
+                <span id="diagFront">—</span>
+              </div>
+              <div class="diag-item">
+                <span class="diag-label">侧视图</span>
+                <span id="diagSide">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="proj-grid">
+          <div>
+            <h3>输入正视图二值结果</h3>
+            <canvas id="maskFront" width="160" height="160"></canvas>
+          </div>
+          <div>
+            <h3>输入侧视图二值结果</h3>
+            <canvas id="maskSide" width="160" height="160"></canvas>
+          </div>
           <div>
             <h3>正视图投影</h3>
             <canvas id="projFront" width="160" height="160"></canvas>
@@ -161,6 +210,6 @@
       }
     }
   </script>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

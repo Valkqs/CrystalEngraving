@@ -1,6 +1,6 @@
 """Dual-projection voxel carving helpers."""
 
-from __future__ import annotations
+from typing import Optional
 
 import numpy as np
 
@@ -38,7 +38,7 @@ def pick_z_for_front(
     side: np.ndarray,
     size: int,
     depth_face_bridge: bool = True,
-) -> int | None:
+) -> Optional[int]:
     """
     Choose Z for voxel (y, x, z).
 
@@ -65,7 +65,7 @@ def pick_y_for_side(
     front: np.ndarray,
     size: int,
     depth_face_bridge: bool = True,
-) -> int | None:
+) -> Optional[int]:
     """Symmetric: use front column Y extent faces when bridging."""
     strict = y_at_column(front, x)
     if strict.size == 0:
