@@ -5,7 +5,7 @@ import socketserver
 import webbrowser
 from pathlib import Path
 
-PORT = 8000
+PORT = 5000
 ROOT = Path(__file__).parent / "static"
 
 
