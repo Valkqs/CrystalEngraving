@@ -7,6 +7,7 @@ import os
 import time
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
 import uvicorn
@@ -29,6 +30,8 @@ app.add_middleware(
 jobs: Dict[str, Dict[str, Any]] = {}
 JOB_TTL_SECONDS = 60 * 60 * 2
 
+_thread_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+
 
 def _job_prefix(job_id: str) -> str:
     return f"[JOB {job_id[:8]}]"
@@ -43,11 +46,15 @@ def _log_job_progress(job_id: str, progress: float, stage: str, detail: Optional
     percent = int(max(0.0, min(1.0, float(progress))) * 100)
     last_stage = job.get("log_stage")
     last_step = job.get("log_step")
+    last_log_time = job.get("log_time", 0.0)
     step = detail.get("step") if isinstance(detail, dict) else None
     max_steps = detail.get("max_steps") if isinstance(detail, dict) else None
+    now = time.time()
 
     should_log = False
     if stage != last_stage:
+        should_log = True
+    elif now - last_log_time >= 2.0:
         should_log = True
     elif isinstance(step, int) and isinstance(max_steps, int):
         if last_step is None or step >= last_step + max(500, max_steps // 20):
@@ -55,6 +62,8 @@ def _log_job_progress(job_id: str, progress: float, stage: str, detail: Optional
 
     if not should_log:
         return
+
+    job["log_time"] = now
 
     extras = []
     if isinstance(step, int) and isinstance(max_steps, int):
@@ -75,6 +84,8 @@ def _log_job_progress(job_id: str, progress: float, stage: str, detail: Optional
         extras.append(f"count_after_sparsify={int(detail['count_after_sparsify'])}")
     if detail.get("point_count") is not None:
         extras.append(f"point_count={int(detail['point_count'])}")
+    if detail.get("num_chains") is not None:
+        extras.append(f"chains={detail['num_chains']}")
 
     suffix = f" | {' '.join(extras)}" if extras else ""
     print(f"{_job_prefix(job_id)} {percent}% {stage}{suffix}")
@@ -107,40 +118,89 @@ def _set_job_progress(job_id: str, progress: float, stage: str, detail: Optional
     _log_job_progress(job_id, progress, stage, detail)
 
 
-async def _run_generate_job(job_id: str, params: Dict[str, Any]) -> None:
-    loop = asyncio.get_running_loop()
+def _run_generate_sync(
+    front_bytes: bytes,
+    side_bytes: bytes,
+    size: int,
+    threshold_val: Optional[int],
+    invert_val: Optional[bool],
+    dilate: int,
+    align_x: bool,
+    clean_mask: bool,
+    overlap_dilate: int,
+    depth_face_bridge: bool,
+    close_side_z_gaps: int,
+    density: float,
+    uniform_strength: float,
+    detail_mode: bool,
+    optimize: bool,
+    chaos_penalty: float,
+    min_f1: float,
+    sa_steps: int,
+    weight_volume: float,
+    rng_seed: int,
+    job_id: str,
+) -> Any:
+    """Module-level function (picklable) — runs generate_voxels and calls back progress."""
 
     def progress_callback(progress: float, stage: str, detail: Optional[Dict[str, Any]] = None) -> None:
         _set_job_progress(job_id, progress, stage, detail)
 
+    return generate_voxels(
+        front_bytes,
+        side_bytes,
+        size=size,
+        threshold=threshold_val,
+        invert=invert_val,
+        dilate=dilate,
+        align_x=align_x,
+        clean_mask=clean_mask,
+        overlap_dilate=overlap_dilate,
+        depth_face_bridge=depth_face_bridge,
+        close_side_z_gaps=close_side_z_gaps,
+        density=density,
+        uniform_strength=uniform_strength,
+        detail_mode=detail_mode,
+        optimize=optimize,
+        chaos_penalty=chaos_penalty,
+        min_f1=min_f1,
+        sa_steps=sa_steps,
+        weight_volume=weight_volume,
+        rng_seed=rng_seed,
+        progress_callback=progress_callback,
+    )
+
+
+async def _run_generate_job(job_id: str, params: Dict[str, Any]) -> None:
+    nw = os.cpu_count() or 4
+    print(f"{_job_prefix(job_id)} started size={params['size']} sa_steps={params['sa_steps']} density={params['density']:.2f} chaos_penalty={params['chaos_penalty']:.2f} workers={nw}")
+
     try:
-        _set_job_progress(job_id, 0.01, "任务已创建，等待后端开始")
-        print(f"{_job_prefix(job_id)} started size={params['size']} sa_steps={params['sa_steps']} density={params['density']:.2f} chaos_penalty={params['chaos_penalty']:.2f}")
-        result = await loop.run_in_executor(
-            None,
-            lambda: generate_voxels(
-                params["front_bytes"],
-                params["side_bytes"],
-                size=params["size"],
-                threshold=params["threshold_val"],
-                invert=params["invert_val"],
-                dilate=params["dilate"],
-                align_x=params["align_x"],
-                clean_mask=params["clean_mask"],
-                overlap_dilate=params["overlap_dilate"],
-                depth_face_bridge=params["depth_face_bridge"],
-                close_side_z_gaps=params["close_side_z_gaps"],
-                density=params["density"],
-                uniform_strength=params["uniform_strength"],
-                detail_mode=params["detail_mode"],
-                optimize=params["optimize"],
-                chaos_penalty=params["chaos_penalty"],
-                min_f1=params["min_f1"],
-                sa_steps=params["sa_steps"],
-                weight_volume=params["weight_volume"],
-                rng_seed=params["rng_seed"],
-                progress_callback=progress_callback,
-            ),
+        _set_job_progress(job_id, 0.01, "任务已创建，正在并行计算")
+        result = await asyncio.get_event_loop().run_in_executor(
+            _thread_executor,
+            _run_generate_sync,
+            params["front_bytes"],
+            params["side_bytes"],
+            params["size"],
+            params["threshold_val"],
+            params["invert_val"],
+            params["dilate"],
+            params["align_x"],
+            params["clean_mask"],
+            params["overlap_dilate"],
+            params["depth_face_bridge"],
+            params["close_side_z_gaps"],
+            params["density"],
+            params["uniform_strength"],
+            params["detail_mode"],
+            params["optimize"],
+            params["chaos_penalty"],
+            params["min_f1"],
+            params["sa_steps"],
+            params["weight_volume"],
+            params["rng_seed"],
+            job_id,
         )
         jobs[job_id]["result"] = {
             "size": result.size,
@@ -298,4 +358,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     dev_reload = os.getenv("CRYSTAL_SERVER_RELOAD", "0").strip().lower() in {"1", "true", "yes", "on"}
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=dev_reload)
+    try:
+        uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=dev_reload)
+    finally:
+        _thread_executor.shutdown(wait=True, cancel_futures=False)
