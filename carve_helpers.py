@@ -1,6 +1,6 @@
 """Dual-projection voxel carving helpers."""
 
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 
@@ -32,13 +32,54 @@ def y_at_column(front: np.ndarray, x: int) -> np.ndarray:
     return np.where(front[:, x])[0]
 
 
+def boundary_faces(front: np.ndarray, side: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    y_rows = np.where(np.any(front, axis=1))[0]
+    z_rows = np.where(np.any(side, axis=1))[0]
+    y_faces = (
+        np.unique(np.array([y_rows[0], y_rows[-1]], dtype=int))
+        if y_rows.size > 0
+        else np.empty((0,), dtype=int)
+    )
+    z_faces = (
+        np.unique(np.array([z_rows[0], z_rows[-1]], dtype=int))
+        if z_rows.size > 0
+        else np.empty((0,), dtype=int)
+    )
+    return y_faces, z_faces
+
+
+def apply_edge_wall_wrap(
+    voxels: np.ndarray,
+    front: np.ndarray,
+    side: np.ndarray,
+) -> None:
+    """
+    Build four boundary walls around the dual projections:
+    - z faces at global z_min/z_max from side mask
+    - y faces at global y_min/y_max from front mask
+    """
+    size = front.shape[0]
+    y_faces, z_faces = boundary_faces(front, side)
+    if y_faces.size == 0 and z_faces.size == 0:
+        return
+
+    if z_faces.size > 0:
+        for z in z_faces:
+            voxels[:, :, z] |= front
+    if y_faces.size > 0:
+        side_xt = side.T
+        for y in y_faces:
+            voxels[y, :, :] |= side_xt
+
+
 def pick_z_for_front(
     y: int,
     x: int,
     side: np.ndarray,
     size: int,
     depth_face_bridge: bool = True,
-) -> Optional[int]:
+    fallback_z_faces: np.ndarray | None = None,
+) -> int | None:
     """
     Choose Z for voxel (y, x, z).
 
@@ -48,6 +89,12 @@ def pick_z_for_front(
     """
     strict = z_at_column(side, x)
     if strict.size == 0:
+        if fallback_z_faces is not None and fallback_z_faces.size > 0:
+            return int(
+                fallback_z_faces[
+                    (y * fallback_z_faces.size) // max(1, size) % fallback_z_faces.size
+                ]
+            )
         return None
 
     if depth_face_bridge and strict.size >= 1:
@@ -65,10 +112,17 @@ def pick_y_for_side(
     front: np.ndarray,
     size: int,
     depth_face_bridge: bool = True,
-) -> Optional[int]:
+    fallback_y_faces: np.ndarray | None = None,
+) -> int | None:
     """Symmetric: use front column Y extent faces when bridging."""
     strict = y_at_column(front, x)
     if strict.size == 0:
+        if fallback_y_faces is not None and fallback_y_faces.size > 0:
+            return int(
+                fallback_y_faces[
+                    (z * fallback_y_faces.size) // max(1, size) % fallback_y_faces.size
+                ]
+            )
         return None
 
     if depth_face_bridge and strict.size >= 1:
@@ -85,6 +139,8 @@ def carve_dual_cover(
     side: np.ndarray,
     *,
     depth_face_bridge: bool = True,
+    edge_strip_fill: bool = True,
+    edge_wall_wrap: bool = True,
 ) -> np.ndarray:
     """
     Build voxels: OR_z == front, OR_y == side (exact on side mask pixels).
@@ -92,12 +148,23 @@ def carve_dual_cover(
     """
     size = front.shape[0]
     voxels = front[:, :, np.newaxis] & side.T[np.newaxis, :, :]
+    fallback_y_faces: np.ndarray | None = None
+    fallback_z_faces: np.ndarray | None = None
+    if edge_strip_fill or edge_wall_wrap:
+        fallback_y_faces, fallback_z_faces = boundary_faces(front, side)
 
     for y in range(size):
         for x in range(size):
             if not front[y, x] or np.any(voxels[y, x, :]):
                 continue
-            z = pick_z_for_front(y, x, side, size, depth_face_bridge)
+            z = pick_z_for_front(
+                y,
+                x,
+                side,
+                size,
+                depth_face_bridge,
+                fallback_z_faces=fallback_z_faces,
+            )
             if z is not None:
                 voxels[y, x, z] = True
 
@@ -105,9 +172,19 @@ def carve_dual_cover(
         for x in range(size):
             if not side[z, x] or np.any(voxels[:, x, z]):
                 continue
-            y = pick_y_for_side(z, x, front, size, depth_face_bridge)
+            y = pick_y_for_side(
+                z,
+                x,
+                front,
+                size,
+                depth_face_bridge,
+                fallback_y_faces=fallback_y_faces,
+            )
             if y is not None:
                 voxels[y, x, z] = True
+
+    if edge_wall_wrap:
+        apply_edge_wall_wrap(voxels, front, side)
 
     return voxels
 
