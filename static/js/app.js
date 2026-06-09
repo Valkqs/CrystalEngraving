@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { autoInvert, otsuThreshold } from "./image_preprocess.js";
 
 const canvasHost = document.getElementById("canvasHost");
 const imageFrontInput = document.getElementById("imageFront");
@@ -7,6 +8,7 @@ const imageSideInput = document.getElementById("imageSide");
 const previewFront = document.getElementById("previewFront");
 const previewSide = document.getElementById("previewSide");
 const generateBtn = document.getElementById("generateBtn");
+const previewBtn = document.getElementById("previewBtn");
 const statusEl = document.getElementById("status");
 const sizeInput = document.getElementById("size");
 const sizeValue = document.getElementById("sizeValue");
@@ -37,6 +39,7 @@ const weightVolumeInput = document.getElementById("weightVolume");
 const weightVolumeValue = document.getElementById("weightVolumeValue");
 const rngSeedInput = document.getElementById("rngSeed");
 const rngSeedValue = document.getElementById("rngSeedValue");
+const optimizerAlgoInput = document.getElementById("optimizerAlgo");
 const pointSizeInput = document.getElementById("pointSize");
 const showWireframeInput = document.getElementById("showWireframe");
 const autoRotateInput = document.getElementById("autoRotate");
@@ -51,29 +54,53 @@ const thresholdSummaryEl = document.getElementById("thresholdSummary");
 const diagModeEl = document.getElementById("diagMode");
 const diagFrontEl = document.getElementById("diagFront");
 const diagSideEl = document.getElementById("diagSide");
+const exportSection = document.getElementById("exportSection");
+const downloadPlyBtn = document.getElementById("downloadPlyBtn");
+const exportInfoEl = document.getElementById("exportInfo");
 
 let frontFile = null;
 let sideFile = null;
+let currentJobId = null;
+let lastPreviewParams = null;
 
 // --- Three.js setup ---
+console.log("[DEBUG] Initializing Three.js...");
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12151e);
+console.log("[DEBUG] Scene created, background:", scene.background.getHexString());
 
-const camera = new THREE.PerspectiveCamera(
-  45,
-  canvasHost.clientWidth / canvasHost.clientHeight,
-  0.1,
-  1000
-);
+const initW = Math.max(canvasHost.clientWidth, 100);
+const initH = Math.max(canvasHost.clientHeight, 100);
+console.log("[DEBUG] canvasHost size:", canvasHost.clientWidth, "x", canvasHost.clientHeight, "-> initW/H:", initW, initH);
+const camera = new THREE.PerspectiveCamera(45, initW / initH, 0.1, 1000);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(canvasHost.clientWidth, canvasHost.clientHeight);
+renderer.setSize(initW, initH);
 canvasHost.appendChild(renderer.domElement);
+console.log("[DEBUG] Renderer created, canvas:", renderer.domElement.tagName, "size:", initW, "x", initH);
+console.log("[DEBUG] canvasHost children:", canvasHost.children.length);
+// Verify WebGL context
+const gl = renderer.getContext();
+console.log("[DEBUG] WebGL context:", gl ? gl.getParameter(gl.VERSION) : "FAILED");
+console.log("[DEBUG] Renderer info:", renderer.info);
 
 const controls = new OrbitControls(camera, renderer.domElement);
+console.log("[DEBUG] OrbitControls created, camera position:", camera.position.x, camera.position.y, camera.position.z);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
+
+// Resize observer to handle canvas host size changes
+const resizeObserver = new ResizeObserver(() => {
+  const w = canvasHost.clientWidth;
+  const h = canvasHost.clientHeight;
+  if (w > 0 && h > 0) {
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
+});
+resizeObserver.observe(canvasHost);
 
 const ambient = new THREE.AmbientLight(0xffffff, 0.55);
 scene.add(ambient);
@@ -128,6 +155,7 @@ function updateWireframe(size, visible) {
 updateWireframe(cubeSize, true);
 
 function buildPointCloud(points, size) {
+  console.log("[DEBUG] buildPointCloud called with", points?.length, "points, size:", size);
   clearPointCloud();
   cubeSize = size;
   updateWireframe(size, showWireframeInput.checked);
@@ -155,6 +183,7 @@ function buildPointCloud(points, size) {
 
   pointCloud = new THREE.Points(geometry, material);
   scene.add(pointCloud);
+  console.log("[DEBUG] pointCloud added to scene, scene children:", scene.children.length);
 
   updateWireframe(size, showWireframeInput.checked);
   centerCamera(size);
@@ -234,6 +263,7 @@ function setupUpload(input, preview, card, onFile) {
     onFile(file);
     preview.src = URL.createObjectURL(file);
     card.classList.add("has-image");
+    updatePreviewBtnState();
     updateGenerateState();
   });
 }
@@ -279,7 +309,7 @@ async function pollJobUntilDone(jobId, timeoutMs = 60 * 60 * 1000) {
 
     statusEl.textContent = `[后端模拟退火] ${percent}% · ${info.stage || "生成中"}${extra}`;
     statusEl.className = "status";
-    diagModeEl.textContent = "后端模拟退火";
+    diagModeEl.textContent = "后端优化中";
 
     if (info.status === "completed") {
       return;
@@ -300,6 +330,73 @@ function updateGenerateState() {
   }
 }
 
+function updatePreviewBtnState() {
+  previewBtn.disabled = !(frontFile && sideFile);
+}
+
+previewBtn.addEventListener("click", () => {
+  previewBtn.disabled = true;
+  statusEl.textContent = "正在生成二值预览...";
+  statusEl.className = "status";
+
+  const formData = new FormData();
+  formData.append("image_front", frontFile);
+  formData.append("image_side", sideFile);
+  formData.append("size", parseInt(sizeInput.value, 10));
+  formData.append("threshold", thresholdInput.value);
+  formData.append("invert", invertInput.checked ? "true" : "false");
+  formData.append("auto_threshold", autoThresholdInput.checked ? "true" : "false");
+
+  fetch("/api/preview", { method: "POST", body: formData })
+    .then((r) => {
+      if (!r.ok) throw new Error(`预览请求失败 ${r.status}`);
+      return r.json();
+    })
+    .then((data) => {
+      console.log("Preview result:", data);
+      const frontImg = new Image();
+      frontImg.onload = () => {
+        const ctx = maskFrontCanvas.getContext("2d");
+        ctx.clearRect(0, 0, maskFrontCanvas.width, maskFrontCanvas.height);
+        maskFrontCanvas.width = 160;
+        maskFrontCanvas.height = 160;
+        ctx.drawImage(frontImg, 0, 0, 160, 160);
+      };
+      frontImg.src = "data:image/png;base64," + data.front_png;
+
+      const sideImg = new Image();
+      sideImg.onload = () => {
+        const ctx = maskSideCanvas.getContext("2d");
+        ctx.clearRect(0, 0, maskSideCanvas.width, maskSideCanvas.height);
+        maskSideCanvas.width = 160;
+        maskSideCanvas.height = 160;
+        ctx.drawImage(sideImg, 0, 0, 160, 160);
+      };
+      sideImg.src = "data:image/png;base64," + data.side_png;
+
+      diagFrontEl.textContent = `阈值${data.threshold_front} / ${data.invert_front ? "反转" : "正相"} / ${(data.mask_front_ratio * 100).toFixed(1)}%`;
+      diagSideEl.textContent = `阈值${data.threshold_side} / ${data.invert_side ? "反转" : "正相"} / ${(data.mask_side_ratio * 100).toFixed(1)}%`;
+      diagModeEl.textContent = data.auto_threshold ? "自动阈值" : "手动阈值";
+
+      lastPreviewParams = {
+        threshold_front: data.threshold_front,
+        threshold_side: data.threshold_side,
+        invert_front: data.invert_front,
+        invert_side: data.invert_side,
+      };
+
+      previewBtn.disabled = false;
+      statusEl.textContent = "二值预览已更新，请确认后点击生成";
+      statusEl.className = "status";
+    })
+    .catch((err) => {
+      console.error("Preview error:", err);
+      previewBtn.disabled = false;
+      statusEl.textContent = "预览失败：" + err.message;
+      statusEl.className = "status error";
+    });
+});
+
 sizeInput.addEventListener("input", () => {
   sizeValue.textContent = sizeInput.value;
 });
@@ -309,11 +406,11 @@ thresholdInput.addEventListener("input", () => {
 dilateInput.addEventListener("input", () => {
   dilateValue.textContent = dilateInput.value;
 });
+autoThresholdInput.dispatchEvent(new Event("change"));
 autoThresholdInput.addEventListener("change", () => {
   thresholdField.style.opacity = autoThresholdInput.checked ? "0.45" : "1";
   thresholdField.style.pointerEvents = autoThresholdInput.checked ? "none" : "auto";
 });
-autoThresholdInput.dispatchEvent(new Event("change"));
 densityInput.addEventListener("input", () => {
   densityValue.textContent = densityInput.value;
 });
@@ -381,10 +478,34 @@ autoRotateInput.addEventListener("change", () => {
   controls.autoRotateSpeed = 1.2;
 });
 
+downloadPlyBtn.addEventListener("click", async () => {
+  if (!currentJobId) return;
+  downloadPlyBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/export/${currentJobId}/ply`);
+    if (!res.ok) throw new Error(`/api/export returned ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `crystal_${currentJobId.slice(0, 8)}.ply`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    downloadPlyBtn.disabled = false;
+  }
+});
+
 generateBtn.addEventListener("click", async () => {
+  console.log("[DEBUG] Generate button clicked");
   if (!frontFile || !sideFile) return;
 
   generateBtn.disabled = true;
+  if (exportSection) exportSection.style.display = "none";
   statusEl.textContent = "正在提交后端任务…";
   statusEl.className = "status";
 
@@ -407,6 +528,7 @@ generateBtn.addEventListener("click", async () => {
   const saSteps = parseInt(saStepsInput.value, 10);
   const weightVolume = parseInt(weightVolumeInput.value, 10) / 100;
   const rngSeed = parseInt(rngSeedInput.value, 10);
+  const optimizerAlgo = optimizerAlgoInput ? optimizerAlgoInput.value : "fast";
 
   await new Promise((r) => setTimeout(r, 0));
 
@@ -433,14 +555,17 @@ generateBtn.addEventListener("click", async () => {
     form.append("sa_steps", String(saSteps));
     form.append("weight_volume", String(weightVolume));
     form.append("rng_seed", String(rngSeed));
+    form.append("optimizer_algo", optimizerAlgo);
 
     const submitRes = await fetch("/api/generate", { method: "POST", body: form });
+    console.log("[DEBUG] /api/generate response status:", submitRes.status);
     if (!submitRes.ok) {
       throw new Error(`后端任务提交失败 (${submitRes.status})`);
     }
 
     const submitData = await submitRes.json();
     const jobId = submitData.job_id;
+    currentJobId = jobId;
     if (!jobId) {
       throw new Error("后端未返回任务 ID");
     }
@@ -453,6 +578,7 @@ generateBtn.addEventListener("click", async () => {
     }
 
     const data = await resultRes.json();
+    console.log("[DEBUG] result data: count=", data.count, "count_full=", data.count_full, "size=", data.size, "points_len=", data.points?.length, "projection_front_len=", data.projection_front?.length);
     data.solve_mode = "backend_sa";
 
     if (!Array.isArray(data.points)) {
@@ -498,6 +624,10 @@ generateBtn.addEventListener("click", async () => {
     statusEl.textContent = `[后端模拟退火] 生成完成，共 ${data.count.toLocaleString()} 个体素 ${tInfo}`.trim();
     statusEl.className = "status success";
     currentViewEl.textContent = "当前视角：自由（可拖拽旋转）";
+    if (exportSection) {
+      exportSection.style.display = "";
+      if (exportInfoEl) exportInfoEl.textContent = `PLY · ${data.size}³ · ${data.count.toLocaleString()} 点`;
+    }
   } catch (e) {
     const message = e?.message || "请先启动 server.py 后端";
     statusEl.textContent = `生成失败：${message}`;
@@ -509,8 +639,8 @@ generateBtn.addEventListener("click", async () => {
 });
 
 function onResize() {
-  const w = canvasHost.clientWidth;
-  const h = canvasHost.clientHeight;
+  const w = Math.max(canvasHost.clientWidth, 1);
+  const h = Math.max(canvasHost.clientHeight, 1);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
@@ -518,12 +648,17 @@ function onResize() {
 
 window.addEventListener("resize", onResize);
 
+let _frameCount = 0;
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
+  _frameCount++;
+  if (_frameCount === 1 || _frameCount % 60 === 0) {
+    console.log("[DEBUG] Frame", _frameCount, "| camera pos:", camera.position.x.toFixed(1), camera.position.y.toFixed(1), camera.position.z.toFixed(1));
+  }
 }
-
+console.log("[DEBUG] animate loop started");
 animate();
 
 // Demo hint: load sample images if user opens without uploads

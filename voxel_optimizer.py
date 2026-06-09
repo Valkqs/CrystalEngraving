@@ -816,3 +816,386 @@ def optimize_voxels_fast(
         count_full,
         opt_params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Genetic Algorithm (GA) optimizer: replaces slow SA path
+# ---------------------------------------------------------------------------
+
+def _ga_tournament_select(
+    population: List[Tuple[np.ndarray, float, float, float, float]],
+    rng: np.random.Generator,
+    k: int = 3,
+) -> Tuple[np.ndarray, float, float, float, float]:
+    """Tournament selection with k contestants."""
+    candidates = [
+        population[i] for i in rng.choice(len(population), size=k, replace=False)
+    ]
+    return max(candidates, key=lambda x: x[4])  # max by objective
+
+
+def _ga_crossover(
+    parent_a: np.ndarray,
+    parent_b: np.ndarray,
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    rng: np.random.Generator,
+    cross_rate: float = 0.5,
+) -> np.ndarray:
+    """Uniform crossover: randomly take voxels from each parent, then repair."""
+    child = np.where(
+        rng.random(parent_a.shape) < cross_rate,
+        parent_a,
+        parent_b,
+    ).astype(bool)
+
+    child = _ga_repair(child, target_front, target_side, rng)
+    return child
+
+
+def _ga_repair(
+    voxels: np.ndarray,
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Ensure voxels maintain both projections coverage."""
+    size = voxels.shape[0]
+    for y in range(size):
+        for x in range(size):
+            if target_front[y, x] and not np.any(voxels[y, x, :]):
+                z_cands = np.where(target_side[:, x])[0]
+                if z_cands.size > 0:
+                    z = int(rng.choice(z_cands))
+                    voxels[y, x, z] = True
+
+    for z in range(size):
+        for x in range(size):
+            if target_side[z, x] and not np.any(voxels[:, x, z]):
+                y_cands = np.where(target_front[:, x])[0]
+                if y_cands.size > 0:
+                    y = int(rng.choice(y_cands))
+                    voxels[y, x, z] = True
+
+    return voxels
+
+
+def _ga_mutate(
+    voxels: np.ndarray,
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    rng: np.random.Generator,
+    mut_rate: float = 0.1,
+) -> np.ndarray:
+    """Apply random voxel mutations (add/remove/move), same ops as SA."""
+    size = voxels.shape[0]
+    coords = np.argwhere(voxels)
+    n_voxels = coords.shape[0]
+    n_mutations = max(1, int(n_voxels * mut_rate))
+
+    for _ in range(n_mutations):
+        op = rng.integers(3)
+
+        if op == 0 and n_voxels > 0:
+            idx = rng.integers(n_voxels)
+            y, x, z = coords[idx]
+
+            ny = int(np.clip(y + rng.integers(-3, 4), 0, size - 1))
+            nx = int(np.clip(x + rng.integers(-2, 3), 0, size - 1))
+            nz = int(np.clip(z + rng.integers(-3, 4), 0, size - 1))
+
+            if not (ny == y and nx == x and nz == z):
+                voxels[y, x, z] = False
+                voxels[ny, nx, nz] = True
+                coords[idx] = [ny, nx, nz]
+
+        elif op == 1 and n_voxels > 0:
+            idx = rng.integers(n_voxels)
+            y, x, z = coords[idx]
+            voxels[y, x, z] = False
+            coords = np.delete(coords, idx, axis=0)
+            n_voxels -= 1
+
+        else:
+            nx, ny, nz = rng.integers(size), rng.integers(size), rng.integers(size)
+            if not voxels[ny, nx, nz] and (target_front[ny, nx] or target_side[nz, nx]):
+                voxels[ny, nx, nz] = True
+                coords = np.vstack([coords, [ny, nx, nz]])
+                n_voxels += 1
+
+    return voxels
+
+
+def _ga_init_individual(
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    density: float,
+    uniform_strength: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Create one GA individual: dual-cover + sparsify + slight random noise."""
+    voxels = carve_dual_cover(target_front, target_side, depth_face_bridge=True)
+    voxels = sparsify_uniform(
+        voxels,
+        density=float(np.clip(density + rng.uniform(-0.15, 0.15), 0.05, 1.0)),
+        uniform_strength=float(np.clip(uniform_strength, 0.0, 1.0)),
+        target_front=target_front,
+        target_side=target_side,
+        depth_face_bridge=True,
+    )
+    return voxels
+
+
+def _ga_fitness(
+    voxels: np.ndarray,
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    w_chaos: float,
+    w_volume: float,
+) -> Tuple[float, float, float, float, float]:
+    """Evaluate an individual: same as SA objective."""
+    return _objective(voxels, target_front, target_side, w_chaos, w_volume)
+
+
+def _ga_chain(
+    chain_id: int,
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    density: float,
+    uniform_strength: float,
+    w_chaos: float,
+    w_volume: float,
+    min_f1_thresh: float,
+    ga_generations: int,
+    pop_size: int,
+    elite_size: int,
+    mut_rate: float,
+    cross_rate: float,
+    rng_seed: int,
+    progress_queue: Optional[Queue] = None,
+) -> Tuple[np.ndarray, float, float, float, float, float, int]:
+    """Run one GA chain; returns best individual found."""
+    rng = np.random.default_rng(rng_seed)
+
+    population: List[Tuple[np.ndarray, float, float, float, float]] = []
+    for _ in range(pop_size):
+        ind = _ga_init_individual(target_front, target_side, density, uniform_strength, rng)
+        fitness = _ga_fitness(ind, target_front, target_side, w_chaos, w_volume)
+        population.append((ind, *fitness))
+
+    best_idx = max(range(len(population)), key=lambda i: population[i][4])
+    best_voxels, best_f1_f, best_f1_s, best_f1_t, best_obj = population[best_idx]
+
+    for gen in range(ga_generations):
+        new_population: List[Tuple[np.ndarray, float, float, float, float]] = []
+
+        elite = sorted(population, key=lambda x: x[4], reverse=True)[:elite_size]
+        new_population.extend(elite)
+
+        while len(new_population) < pop_size:
+            p1 = _ga_tournament_select(population, rng, k=3)
+            p2 = _ga_tournament_select(population, rng, k=3)
+
+            child = _ga_crossover(
+                p1[0], p2[0], target_front, target_side, rng, cross_rate
+            )
+            child = _ga_mutate(child, target_front, target_side, rng, mut_rate)
+
+            f1_f, f1_s, f1_t, chaos_val, obj_val = _ga_fitness(
+                child, target_front, target_side, w_chaos, w_volume
+            )
+
+            if f1_t < min_f1_thresh:
+                child = p1[0].copy()
+
+            new_population.append((child, f1_f, f1_s, f1_t, obj_val))
+
+        population = new_population
+
+        best_idx = max(range(len(population)), key=lambda i: population[i][4])
+        cand_voxels = population[best_idx][0]
+        cand_f1_t = population[best_idx][4]
+        if cand_f1_t > best_obj:
+            best_voxels = cand_voxels.copy()
+            best_f1_f = population[best_idx][1]
+            best_f1_s = population[best_idx][2]
+            best_f1_t = population[best_idx][4]
+            best_obj = population[best_idx][4]
+
+        if progress_queue is not None and (gen % 5 == 0 or gen == ga_generations - 1):
+            progress_queue.put({
+                "chain_id": chain_id,
+                "generation": gen + 1,
+                "total_generations": ga_generations,
+                "best_f1": best_f1_t,
+                "best_obj": best_obj,
+                "pop_size": pop_size,
+            })
+
+    return best_voxels, best_f1_f, best_f1_s, best_f1_t, best_obj, 0.0, ga_generations
+
+
+# ---------------------------------------------------------------------------
+# Public API with GA as an option
+# ---------------------------------------------------------------------------
+
+def optimize_voxels_ga(
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    density: float = 0.75,
+    uniform_strength: float = 0.25,
+    chaos_penalty: float = 0.5,
+    min_f1: float = 0.72,
+    ga_steps: int = 12000,
+    rng_seed: int = 42,
+    weight_volume: float = 0.10,
+    verbose: bool = False,
+    progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None,
+) -> Tuple:
+    """Genetic Algorithm voxel optimizer, runs in parallel across CPU cores.
+
+    Each chain runs an independent GA with tournament selection, uniform crossover,
+    and voxel-level mutation. Best individual across all chains is returned.
+    """
+    size = target_front.shape[0]
+    w_chaos = float(chaos_penalty)
+    w_volume = float(weight_volume)
+    min_f1_thresh = float(np.clip(min_f1, 0.50, 0.99))
+
+    num_chains = min(_MAX_WORKERS, 32)
+    pop_size = max(8, min(32, num_chains * 2))
+    elite_size = max(1, pop_size // 8)
+    ga_generations = max(50, int(ga_steps / 100))
+
+    mut_rate = 0.05 + 0.15 * (1.0 - density)
+    cross_rate = 0.5
+
+    def report(p: float, stage: str, detail: Optional[Dict] = None) -> None:
+        if progress_callback is not None:
+            progress_callback(p, stage, detail)
+
+    report(0.01, f"启动 GA ({num_chains} 条链, 每链 pop={pop_size}, {ga_generations} 代)")
+
+    base_seed = int(rng_seed)
+    chain_seeds = [base_seed + i * 17 + i * i for i in range(num_chains)]
+
+    t0 = time.monotonic()
+    best_voxels = carve_dual_cover(target_front, target_side, depth_face_bridge=True)
+    count_full = int(best_voxels.sum())
+
+    manager = Manager()
+    queues: List[Queue] = [manager.Queue() for _ in range(num_chains)]
+
+    with ProcessPoolExecutor(max_workers=num_chains) as executor:
+        futures = {}
+        for cid, seed in enumerate(chain_seeds):
+            fut = executor.submit(
+                _ga_chain,
+                cid,
+                target_front,
+                target_side,
+                density,
+                uniform_strength,
+                w_chaos,
+                w_volume,
+                min_f1_thresh,
+                ga_generations,
+                pop_size,
+                elite_size,
+                mut_rate,
+                cross_rate,
+                seed,
+                queues[cid],
+            )
+            futures[fut] = cid
+
+        completed = 0
+        chain_results: List[Tuple[int, np.ndarray, float, float, float, float, int]] = []
+
+        chain_best_f1: List[float] = [0.0] * num_chains
+        chain_gen: List[int] = [0] * num_chains
+
+        while completed < num_chains:
+            for cid in range(num_chains):
+                while not queues[cid].empty():
+                    try:
+                        info = queues[cid].get_nowait()
+                        chain_best_f1[cid] = info.get("best_f1", 0.0)
+                        chain_gen[cid] = info.get("generation", 0)
+                    except Exception:
+                        break
+
+            running = num_chains - completed
+            avg_gen = sum(chain_gen[cid] for cid in range(num_chains)
+                         if chain_gen[cid] > 0) / max(1, sum(1 for cid in range(num_chains) if chain_gen[cid] > 0))
+            overall = (completed + (avg_gen / ga_generations) * running) / num_chains
+            overall = max(0.01, min(0.99, overall))
+
+            best_so_far = max(chain_best_f1) if chain_best_f1 else 0.0
+            report(
+                overall,
+                f"GA 运行中 ({completed}/{num_chains} 链完成, 第 {avg_gen:.0f}/{ga_generations} 代)",
+                {"best_f1": best_so_far, "completed": completed, "running": running},
+            )
+
+            done_ids = []
+            for fut in futures:
+                if fut.done():
+                    done_ids.append(fut)
+            for fut in done_ids:
+                cid = futures[fut]
+                voxels, f1_f, f1_s, f1_t, obj_val, chaos_val, gens = fut.result()
+                chain_results.append((cid, voxels, f1_f, f1_s, f1_t, obj_val, gens))
+                completed += 1
+                elapsed = time.monotonic() - t0
+                report(
+                    completed / num_chains,
+                    f"GA 链 {completed}/{num_chains} 完成 (CID={cid})",
+                    {"chain_id": cid, "f1_total": f1_t, "obj": obj_val, "elapsed_s": round(elapsed, 1)},
+                )
+
+            if completed < num_chains:
+                time.sleep(0.2)
+
+    chain_results.sort(key=lambda r: r[5], reverse=True)
+    best_voxels = chain_results[0][1]
+    best_f1_f = chain_results[0][2]
+    best_f1_s = chain_results[0][3]
+    best_f1_t = chain_results[0][4]
+    best_obj = chain_results[0][5]
+    best_chaos = _chaos(best_voxels)
+
+    elapsed = time.monotonic() - t0
+    report(1.0, f"GA 完成 ({num_chains} 链, {elapsed:.1f}s)", {
+        "best_f1": best_f1_t,
+        "best_chaos": best_chaos,
+        "num_chains": num_chains,
+        "pop_size": pop_size,
+        "generations": ga_generations,
+        "elapsed_s": round(elapsed, 2),
+        "chain_f1_scores": [float(r[4]) for r in chain_results],
+    })
+
+    opt_params = {
+        "w_chaos": w_chaos,
+        "w_volume": w_volume,
+        "min_f1": min_f1_thresh,
+        "ga_steps": ga_steps,
+        "rng_seed": rng_seed,
+        "num_chains": num_chains,
+        "pop_size": pop_size,
+        "generations": ga_generations,
+        "elapsed_s": round(elapsed, 2),
+        "method": "ga",
+    }
+    return (
+        best_voxels,
+        best_f1_f,
+        best_f1_s,
+        best_f1_t,
+        best_chaos,
+        best_obj,
+        None,
+        count_full,
+        opt_params,
+    )

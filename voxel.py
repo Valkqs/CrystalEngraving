@@ -7,7 +7,7 @@ import numpy as np
 from carve_helpers import carve_dual_cover, close_side_z_gaps as fill_side_z_gaps
 from image_preprocess import extract_mask, gentle_clean, load_grayscale_fit
 from sparsify import sparsify_uniform
-from voxel_optimizer import optimize_voxels
+from voxel_optimizer import optimize_voxels, optimize_voxels_ga
 
 
 class VoxelResult:
@@ -130,6 +130,7 @@ def generate_voxels(
     weight_volume: float = 0.10,
     rng_seed: int = 42,
     progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None,
+    optimizer_algo: str = "fast",
 ) -> VoxelResult:
     size = int(np.clip(size, 16, 512))
     dilate = int(np.clip(dilate, 0, 5))
@@ -187,30 +188,88 @@ def generate_voxels(
     count_full = 0
 
     if optimize:
-        (
-            voxels,
-            f1_front_val,
-            f1_side_val,
-            f1_total_val,
-            chaos_val,
-            objective_val,
-            _,
-            count_full,
-            opt_params,
-        ) = optimize_voxels(
-            front,
-            side,
-            density=density,
-            uniform_strength=uniform_strength,
-            align_x=False,
-            chaos_penalty=chaos_penalty,
-            min_f1=float(np.clip(min_f1, 0.50, 0.99)),
-            sa_steps=int(np.clip(sa_steps, 500, 50000)),
-            rng_seed=int(rng_seed),
-            weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
-            verbose=False,
-            progress_callback=lambda p, stage, detail=None: report(0.30 + 0.62 * p, stage, detail),
-        )
+        ga_steps = int(np.clip(sa_steps, 500, 50000))
+        progress_offset = 0.30
+        progress_scale = 0.62
+
+        if optimizer_algo == "ga":
+            report(progress_offset, "启动遗传算法 GA 并行优化")
+            (
+                voxels,
+                f1_front_val,
+                f1_side_val,
+                f1_total_val,
+                chaos_val,
+                objective_val,
+                _,
+                count_full,
+                opt_params,
+            ) = optimize_voxels_ga(
+                front,
+                side,
+                density=density,
+                uniform_strength=uniform_strength,
+                chaos_penalty=chaos_penalty,
+                min_f1=float(np.clip(min_f1, 0.50, 0.99)),
+                ga_steps=ga_steps,
+                rng_seed=int(rng_seed),
+                weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
+                verbose=False,
+                progress_callback=lambda p, stage, detail=None: report(progress_offset + progress_scale * p, stage, detail),
+            )
+        elif optimizer_algo == "sa":
+            report(progress_offset, "启动模拟退火 SA 并行优化")
+            (
+                voxels,
+                f1_front_val,
+                f1_side_val,
+                f1_total_val,
+                chaos_val,
+                objective_val,
+                _,
+                count_full,
+                opt_params,
+            ) = optimize_voxels(
+                front,
+                side,
+                density=density,
+                uniform_strength=uniform_strength,
+                align_x=False,
+                chaos_penalty=chaos_penalty,
+                min_f1=float(np.clip(min_f1, 0.50, 0.99)),
+                sa_steps=ga_steps,
+                rng_seed=int(rng_seed),
+                weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
+                verbose=False,
+                use_fast=False,
+                progress_callback=lambda p, stage, detail=None: report(progress_offset + progress_scale * p, stage, detail),
+            )
+        else:
+            report(progress_offset, "启动快速贪心优化")
+            (
+                voxels,
+                f1_front_val,
+                f1_side_val,
+                f1_total_val,
+                chaos_val,
+                objective_val,
+                _,
+                count_full,
+                opt_params,
+            ) = optimize_voxels(
+                front,
+                side,
+                density=density,
+                uniform_strength=uniform_strength,
+                align_x=False,
+                chaos_penalty=chaos_penalty,
+                min_f1=float(np.clip(min_f1, 0.50, 0.99)),
+                sa_steps=ga_steps,
+                rng_seed=int(rng_seed),
+                weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
+                verbose=False,
+                progress_callback=lambda p, stage, detail=None: report(progress_offset + progress_scale * p, stage, detail),
+            )
     else:
         report(0.34, "构建初始双视角体素覆盖")
         voxels = carve_dual_cover(

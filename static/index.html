@@ -98,8 +98,16 @@
             <input type="range" id="minF1" min="50" max="99" step="1" value="72" />
           </label>
           <label class="field" id="saStepsField">
-            <span>模拟退火迭代数 <strong id="saStepsValue">12000</strong></span>
+            <span>迭代数 <strong id="saStepsValue">12000</strong></span>
             <input type="range" id="saSteps" min="1000" max="30000" step="500" value="12000" />
+          </label>
+          <label class="field">
+            <span>优化算法</span>
+            <select id="optimizerAlgo" style="margin-top:4px">
+              <option value="fast">快速贪心（推荐，默认）</option>
+              <option value="ga">遗传算法 GA</option>
+              <option value="sa">模拟退火 SA（慢）</option>
+            </select>
           </label>
           <label class="field" id="weightVolumeField">
             <span>体积惩罚权重 <strong id="weightVolumeValue">10</strong>%</span>
@@ -109,12 +117,16 @@
             <span>随机种子 <strong id="rngSeedValue">42</strong></span>
             <input type="range" id="rngSeed" min="0" max="200" step="1" value="42" />
           </label>
-          <p class="hint-inline">蓝底校徽会自动识别反转；图片居中缩放不拉伸。默认使用模拟退火搜索 3D 点阵；精细模式 + 分辨率 192 适合浙大校徽等细节图案。</p>
+          <p class="hint-inline">蓝底校徽会自动识别反转；图片居中缩放不拉伸。快速贪心为默认算法，GA 可探索更多解空间，SA 最慢但最彻底。精细模式 + 分辨率 192 适合浙大校徽等细节图案。</p>
         </section>
 
         <section>
           <button id="generateBtn" class="primary" disabled>生成立体点阵</button>
           <p id="status" class="status">请上传两张图片</p>
+          <div id="exportSection" style="display:none; margin-top:8px">
+            <button id="downloadPlyBtn" class="secondary">下载 PLY 点云</button>
+            <span id="exportInfo" style="font-size:0.85em;color:#666;margin-left:8px"></span>
+          </div>
         </section>
 
         <section>
@@ -159,7 +171,10 @@
 
       <aside class="panel projections">
         <h2>投影校验</h2>
-        <p class="hint">生成后可对比：从对应方向看 3D 点阵的投影应与输入图片一致</p>
+        <div class="preview-row">
+          <button id="previewBtn" class="secondary" disabled>二值预览</button>
+          <p class="hint">上传图片后点击生成二值预览，阈值变化后自动刷新</p>
+        </div>
         <div class="diagnostics" id="thresholdDiagnostics">
           <div class="diag-card">
             <h3>阈值诊断</h3>
@@ -183,10 +198,12 @@
         <div class="proj-grid">
           <div>
             <h3>输入正视图二值结果</h3>
+            <p class="mask-hint">正视图二值</p>
             <canvas id="maskFront" width="160" height="160"></canvas>
           </div>
           <div>
             <h3>输入侧视图二值结果</h3>
+            <p class="mask-hint">正视图二值</p>
             <canvas id="maskSide" width="160" height="160"></canvas>
           </div>
           <div>

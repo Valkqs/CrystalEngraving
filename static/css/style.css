@@ -193,6 +193,25 @@ body {
   margin-bottom: 0.75rem;
 }
 
+.preview-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.preview-row .hint {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 160px;
+.mask-hint {
+  font-size: 0.68rem;
+  color: var(--accent-dim);
+  margin-bottom: 4px;
+  text-align: center;
+}
+
 .diagnostics {
   margin-bottom: 0.9rem;
 }
@@ -304,7 +323,7 @@ body {
 .viewer-area {
   display: flex;
   flex-direction: column;
-  min-height: 500px;
+  min-height: 900px;
 }
 
 .canvas-host {
@@ -313,7 +332,8 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-  min-height: 480px;
+  min-height: 0;
+  height: 100%;
 }
 
 .stats-bar {
