@@ -2,6 +2,17 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { autoInvert, otsuThreshold } from "./image_preprocess.js";
 
+// Redirect all console.log to server for debugging
+const _origLog = console.log;
+console.log = (...args) => {
+  _origLog.apply(console, args);
+  fetch("/api/log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ msg: args.map(a => String(a)).join(" ") }),
+  }).catch(() => {});
+};
+
 const canvasHost = document.getElementById("canvasHost");
 const imageFrontInput = document.getElementById("imageFront");
 const imageSideInput = document.getElementById("imageSide");
@@ -64,23 +75,18 @@ let currentJobId = null;
 let lastPreviewParams = null;
 
 // --- Three.js setup ---
-console.log("[DEBUG] Initializing Three.js...");
+console.log("[DEBUG] === Three.js initialization START ===");
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12151e);
 console.log("[DEBUG] Scene created, background:", scene.background.getHexString());
 
-const initW = Math.max(canvasHost.clientWidth, 100);
-const initH = Math.max(canvasHost.clientHeight, 100);
-console.log("[DEBUG] canvasHost size:", canvasHost.clientWidth, "x", canvasHost.clientHeight, "-> initW/H:", initW, initH);
-const camera = new THREE.PerspectiveCamera(45, initW / initH, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(initW, initH);
 canvasHost.appendChild(renderer.domElement);
-console.log("[DEBUG] Renderer created, canvas:", renderer.domElement.tagName, "size:", initW, "x", initH);
-console.log("[DEBUG] canvasHost children:", canvasHost.children.length);
-// Verify WebGL context
+console.log("[DEBUG] Renderer created, canvas:", renderer.domElement.tagName);
+
 const gl = renderer.getContext();
 console.log("[DEBUG] WebGL context:", gl ? gl.getParameter(gl.VERSION) : "FAILED");
 console.log("[DEBUG] Renderer info:", renderer.info);
@@ -90,17 +96,29 @@ console.log("[DEBUG] OrbitControls created, camera position:", camera.position.x
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-// Resize observer to handle canvas host size changes
-const resizeObserver = new ResizeObserver(() => {
-  const w = canvasHost.clientWidth;
-  const h = canvasHost.clientHeight;
+function resizeCanvasHost() {
+  const viewer = document.querySelector('.viewer-area');
+  const stats = viewer?.querySelector('.stats-bar');
+  const viewerH = viewer?.clientHeight ?? 0;
+  const statsH = stats?.clientHeight ?? 24;
+  const computedH = viewerH > 0 ? viewerH - statsH : 0;
+  const rect = canvasHost.getBoundingClientRect();
+  const w = Math.floor(rect.width);
+  const h = computedH > 0 ? computedH : Math.floor(rect.height);
+  console.log(`[DEBUG] resizeCanvasHost bounding:${w}x${h} | viewer:${viewerH} stats:${statsH} computed:${computedH}`);
   if (w > 0 && h > 0) {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
   }
+}
+
+const resizeObserver = new ResizeObserver(() => {
+  resizeCanvasHost();
 });
 resizeObserver.observe(canvasHost);
+resizeCanvasHost();
+console.log("[DEBUG] ResizeObserver attached, watching:", canvasHost);
 
 const ambient = new THREE.AmbientLight(0xffffff, 0.55);
 scene.add(ambient);
@@ -124,6 +142,7 @@ function centerCamera(size) {
 }
 
 centerCamera(cubeSize);
+console.log("[DEBUG] === Three.js initialization END ===");
 
 function clearPointCloud() {
   if (pointCloud) {
@@ -639,11 +658,7 @@ generateBtn.addEventListener("click", async () => {
 });
 
 function onResize() {
-  const w = Math.max(canvasHost.clientWidth, 1);
-  const h = Math.max(canvasHost.clientHeight, 1);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  renderer.setSize(w, h);
+  resizeCanvasHost();
 }
 
 window.addEventListener("resize", onResize);

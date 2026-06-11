@@ -462,6 +462,13 @@ async def api_preview(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
+@app.post("/api/log")
+async def api_log(payload: Dict[str, Any]):
+    """Echo browser console.log to server stdout for debugging."""
+    print(f"[BROWSER] {payload.get('msg', '')}")
+    return {"ok": True}
+
+
 @app.get("/api/export/{job_id}/ply")
 async def api_export_ply(job_id: str):
     """Export voxel point cloud as PLY file for 3D printing / CAD import."""
