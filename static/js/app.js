@@ -298,7 +298,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pollJobUntilDone(jobId, timeoutMs = 60 * 60 * 1000) {
+async function pollJobUntilDone(jobId, timeoutMs = 4 * 60 * 60 * 1000) {
   const startedAt = Date.now();
 
   while (true) {

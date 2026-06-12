@@ -33,7 +33,7 @@ app.add_middleware(
 )
 
 jobs: Dict[str, Dict[str, Any]] = {}
-JOB_TTL_SECONDS = 60 * 60 * 2
+JOB_TTL_SECONDS = 60 * 60 * 4
 
 _thread_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
 
