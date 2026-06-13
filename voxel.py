@@ -12,11 +12,11 @@ from voxel_optimizer import optimize_voxels, optimize_voxels_ga
 
 class VoxelResult:
     __slots__ = ('size', 'points', 'count', 'count_full',
-                 'projection_front', 'projection_side',
-                 'threshold_front', 'threshold_side',
-                 'invert_front', 'invert_side',
-                 'mask_front', 'mask_side',
-                 'f1_front', 'f1_side', 'f1_total',
+                 'projection_front', 'projection_side', 'projection_top',
+                 'threshold_front', 'threshold_side', 'threshold_top',
+                 'invert_front', 'invert_side', 'invert_top',
+                 'mask_front', 'mask_side', 'mask_top',
+                 'f1_front', 'f1_side', 'f1_top', 'f1_total',
                  'chaos', 'objective',
                  'optimize_params')
 
@@ -40,6 +40,11 @@ class VoxelResult:
         chaos: float = 0.0,
         objective: float = 1.0,
         optimize_params: Optional[Dict] = None,
+        projection_top: Optional[List[List[int]]] = None,
+        threshold_top: Optional[int] = None,
+        invert_top: Optional[bool] = None,
+        mask_top: Optional[List[List[int]]] = None,
+        f1_top: float = 0.0,
     ):
         self.size = size
         self.points = points
@@ -47,14 +52,19 @@ class VoxelResult:
         self.count_full = count_full
         self.projection_front = projection_front
         self.projection_side = projection_side
+        self.projection_top = projection_top
         self.threshold_front = threshold_front
         self.threshold_side = threshold_side
+        self.threshold_top = threshold_top
         self.invert_front = invert_front
         self.invert_side = invert_side
+        self.invert_top = invert_top
         self.mask_front = mask_front
         self.mask_side = mask_side
+        self.mask_top = mask_top
         self.f1_front = f1_front
         self.f1_side = f1_side
+        self.f1_top = f1_top
         self.f1_total = f1_total
         self.chaos = chaos
         self.objective = objective
@@ -74,6 +84,12 @@ def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
                 merged |= padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
         out = merged
     return out
+
+
+def _dice_f1(a: np.ndarray, b: np.ndarray) -> float:
+    inter = float(np.sum(a & b))
+    total = float(np.sum(a) + np.sum(b))
+    return 1.0 if total < 1e-9 else 2.0 * inter / total
 
 
 def _dilate_horizontal(mask: np.ndarray, radius: int = 1) -> np.ndarray:
@@ -131,6 +147,10 @@ def generate_voxels(
     rng_seed: int = 42,
     progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None,
     optimizer_algo: str = "fast",
+    image_top_bytes: Optional[bytes] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> VoxelResult:
     size = int(np.clip(size, 16, 512))
     dilate = int(np.clip(dilate, 0, 5))
@@ -148,6 +168,10 @@ def generate_voxels(
 
     front_gray = load_grayscale_fit(image_front_bytes, size)
     side_gray = load_grayscale_fit(image_side_bytes, size)
+
+    top_gray = None
+    if image_top_bytes:
+        top_gray = load_grayscale_fit(image_top_bytes, size)
     report(0.10, "图像预处理完成，开始提取二值掩码")
 
     user_invert = None if invert is None else bool(invert)
@@ -156,14 +180,24 @@ def generate_voxels(
     )
     side, t_side, inv_side = extract_mask(side_gray, threshold, user_invert, denoise=True)
 
+    top = None
+    t_top = None
+    inv_top = None
+    if top_gray is not None:
+        top, t_top, inv_top = extract_mask(top_gray, threshold, user_invert, denoise=True)
+
     if clean_mask:
         front = gentle_clean(front)
         side = gentle_clean(side)
+        if top is not None:
+            top = gentle_clean(top)
 
     report(0.18, "掩码提取完成，开始形态学处理")
 
     front = _dilate(front, dilate)
     side = _dilate(side, dilate)
+    if top is not None:
+        top = _dilate(top, dilate)
 
     if align_x:
         side = _align_side_x(front, side)
@@ -181,6 +215,7 @@ def generate_voxels(
 
     f1_front_val = 1.0
     f1_side_val = 1.0
+    f1_top_val = 0.0
     f1_total_val = 1.0
     chaos_val = 0.0
     objective_val = 1.0
@@ -191,6 +226,20 @@ def generate_voxels(
         ga_steps = int(np.clip(sa_steps, 500, 50000))
         progress_offset = 0.30
         progress_scale = 0.62
+
+        common_kwargs = dict(
+            density=density,
+            uniform_strength=uniform_strength,
+            chaos_penalty=chaos_penalty,
+            min_f1=float(np.clip(min_f1, 0.50, 0.99)),
+            rng_seed=int(rng_seed),
+            weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
+            verbose=False,
+            target_top=top,
+            w_f1_front=float(np.clip(w_f1_front, 0.0, 10.0)),
+            w_f1_top=float(np.clip(w_f1_top, 0.0, 10.0)),
+            w_f1_side=float(np.clip(w_f1_side, 0.0, 10.0)),
+        )
 
         if optimizer_algo == "ga":
             report(progress_offset, "启动遗传算法 GA 并行优化")
@@ -207,15 +256,9 @@ def generate_voxels(
             ) = optimize_voxels_ga(
                 front,
                 side,
-                density=density,
-                uniform_strength=uniform_strength,
-                chaos_penalty=chaos_penalty,
-                min_f1=float(np.clip(min_f1, 0.50, 0.99)),
                 ga_steps=ga_steps,
-                rng_seed=int(rng_seed),
-                weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
-                verbose=False,
                 progress_callback=lambda p, stage, detail=None: report(progress_offset + progress_scale * p, stage, detail),
+                **common_kwargs,
             )
         elif optimizer_algo == "sa":
             report(progress_offset, "启动模拟退火 SA 并行优化")
@@ -232,17 +275,11 @@ def generate_voxels(
             ) = optimize_voxels(
                 front,
                 side,
-                density=density,
-                uniform_strength=uniform_strength,
-                align_x=False,
-                chaos_penalty=chaos_penalty,
-                min_f1=float(np.clip(min_f1, 0.50, 0.99)),
                 sa_steps=ga_steps,
-                rng_seed=int(rng_seed),
-                weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
-                verbose=False,
+                align_x=False,
                 use_fast=False,
                 progress_callback=lambda p, stage, detail=None: report(progress_offset + progress_scale * p, stage, detail),
+                **common_kwargs,
             )
         else:
             report(progress_offset, "启动快速贪心优化")
@@ -259,17 +296,16 @@ def generate_voxels(
             ) = optimize_voxels(
                 front,
                 side,
-                density=density,
-                uniform_strength=uniform_strength,
-                align_x=False,
-                chaos_penalty=chaos_penalty,
-                min_f1=float(np.clip(min_f1, 0.50, 0.99)),
                 sa_steps=ga_steps,
-                rng_seed=int(rng_seed),
-                weight_volume=float(np.clip(weight_volume, 0.0, 1.0)),
-                verbose=False,
+                align_x=False,
                 progress_callback=lambda p, stage, detail=None: report(progress_offset + progress_scale * p, stage, detail),
+                **common_kwargs,
             )
+
+        # Recompute the per-direction F1 from final voxels so the API can report
+        # the top-direction score alongside front/side.
+        if top is not None:
+            f1_top_val = _dice_f1(np.any(voxels, axis=1), top)
     else:
         report(0.34, "构建初始双视角体素覆盖")
         voxels = carve_dual_cover(
@@ -284,9 +320,12 @@ def generate_voxels(
             uniform_strength=float(np.clip(uniform_strength, 0.0, 1.0)),
             target_front=front,
             target_side=side,
+            target_top=top,
             depth_face_bridge=depth_face_bridge,
         )
         report(0.82, "点阵优化完成，开始整理结果")
+        if top is not None:
+            f1_top_val = _dice_f1(np.any(voxels, axis=1), top)
 
     ys, xs, zs = np.where(voxels)
     points = [[float(x), float(y), float(z)] for y, x, z in zip(ys, xs, zs)]
@@ -299,14 +338,19 @@ def generate_voxels(
         count_full=count_full,
         projection_front=np.any(voxels, axis=2).astype(np.int8).tolist(),
         projection_side=np.any(voxels, axis=0).T.astype(np.int8).tolist(),
+        projection_top=(np.any(voxels, axis=1).astype(np.int8).tolist() if top is not None else None),
         threshold_front=t_front,
         threshold_side=t_side,
+        threshold_top=t_top,
         invert_front=inv_front,
         invert_side=inv_side,
+        invert_top=inv_top,
         mask_front=front.astype(np.int8).tolist(),
         mask_side=side.astype(np.int8).tolist(),
+        mask_top=(top.astype(np.int8).tolist() if top is not None else None),
         f1_front=f1_front_val,
         f1_side=f1_side_val,
+        f1_top=f1_top_val,
         f1_total=f1_total_val,
         chaos=chaos_val,
         objective=objective_val,

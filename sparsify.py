@@ -36,6 +36,7 @@ def _repair_coverage(
     *,
     depth_face_bridge: bool = True,
     chaos_strength: float = 0.0,
+    target_top: Optional[np.ndarray] = None,
 ) -> None:
     size = front.shape[0]
     for y in range(size):
@@ -66,6 +67,21 @@ def _repair_coverage(
                 y = pick_y_for_side(z, x, front, size, depth_face_bridge)
             if y is not None:
                 selected[y, x, z] = True
+
+    if target_top is not None:
+        for x in range(size):
+            for z in range(size):
+                if not target_top[x, z] or np.any(selected[:, x, z]):
+                    continue
+                y_pool = y_at_column(front, x)
+                if y_pool.size == 0:
+                    continue
+                if chaos_strength > 0.0 and y_pool.size > 1:
+                    y = int(np.random.choice(y_pool))
+                else:
+                    y = pick_y_for_side(z, x, front, size, depth_face_bridge)
+                if y is not None:
+                    selected[y, x, z] = True
 
 
 def _z_pool(side: np.ndarray, x: int, depth_face_bridge: bool) -> np.ndarray:
@@ -99,8 +115,9 @@ def sparsify_uniform(
     target_side: Optional[np.ndarray] = None,
     depth_face_bridge: bool = True,
     chaos_strength: float = 0.0,
+    target_top: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Sparsify voxels while preserving dual-view projections.
+    """Sparsify voxels while preserving projection masks.
 
     Args:
         voxels:          3D boolean voxel array.
@@ -108,6 +125,8 @@ def sparsify_uniform(
         uniform_strength: How evenly to distribute voxels (0=random, 1=even).
         target_front:    Required front projection mask.
         target_side:     Required side projection mask.
+        target_top:      Optional top-down projection mask (X, Z) — when set,
+                         columns that fail to cover a top pixel get repaired.
         depth_face_bridge: Whether to fill depth faces for z-gaps.
         chaos_strength:  How irregularly to pick voxel positions (0=grid,
                        1=fully random). Higher = more chaotic from oblique views.
@@ -119,6 +138,7 @@ def sparsify_uniform(
     size = voxels.shape[0]
     req_front = target_front if target_front is not None else np.any(voxels, axis=2)
     req_side = target_side if target_side is not None else np.any(voxels, axis=0).T
+    req_top = target_top
     front = req_front
     side = req_side
 
@@ -128,6 +148,7 @@ def sparsify_uniform(
             out, req_front, req_side, front, side,
             depth_face_bridge=depth_face_bridge,
             chaos_strength=chaos_strength,
+            target_top=req_top,
         )
         return out
 
@@ -188,6 +209,7 @@ def sparsify_uniform(
             selected, req_front, req_side, front, side,
             depth_face_bridge=depth_face_bridge,
             chaos_strength=chaos_strength,
+            target_top=req_top,
         )
 
     target = max(int(req_front.sum() + req_side.sum()) // 2, int(total * density))
@@ -214,11 +236,13 @@ def sparsify_uniform(
         _repair_coverage(
             selected, req_front, req_side, front, side,
             depth_face_bridge=depth_face_bridge, chaos_strength=chaos_strength,
+            target_top=req_top,
         )
         coords = np.argwhere(selected)
 
     _repair_coverage(
         selected, req_front, req_side, front, side,
         depth_face_bridge=depth_face_bridge, chaos_strength=chaos_strength,
+        target_top=req_top,
     )
     return selected

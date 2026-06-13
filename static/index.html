@@ -32,7 +32,30 @@
               <img id="previewSide" alt="侧视图预览" />
               <span class="placeholder">点击上传</span>
             </label>
+            <label class="upload-card" id="topUploadCard">
+              <span class="label">俯视图（-Y 向下，<strong>可选</strong>）</span>
+              <input type="file" id="imageTop" accept="image/*" />
+              <img id="previewTop" alt="俯视图预览" />
+              <span class="placeholder">点击上传（启用 3 方向）</span>
+            </label>
           </div>
+        </section>
+
+        <section id="topWeightsSection" style="display:none">
+          <h2>3 方向权重（仅当上传俯视图时生效）</h2>
+          <label class="field">
+            <span>正视权重 <strong id="wF1FrontValue">100</strong>%</span>
+            <input type="range" id="wF1Front" min="0" max="200" step="5" value="100" />
+          </label>
+          <label class="field">
+            <span>俯视权重 <strong id="wF1TopValue">100</strong>%</span>
+            <input type="range" id="wF1Top" min="0" max="200" step="5" value="100" />
+          </label>
+          <label class="field">
+            <span>侧视权重 <strong id="wF1SideValue">100</strong>%</span>
+            <input type="range" id="wF1Side" min="0" max="200" step="5" value="100" />
+          </label>
+          <p class="hint-inline">三个方向的 F1 按权重平均。某方向权重设为 0 即忽略该方向。</p>
         </section>
 
         <section>
@@ -215,6 +238,10 @@
           <div>
             <h3>侧视图投影</h3>
             <canvas id="projSide" width="160" height="160"></canvas>
+          </div>
+          <div id="projTopContainer" style="display:none">
+            <h3>俯视图投影</h3>
+            <canvas id="projTop" width="160" height="160"></canvas>
           </div>
         </div>
       </aside>

@@ -147,6 +147,10 @@ def _run_generate_sync(
     rng_seed: int,
     optimizer_algo: str,
     job_id: str,
+    top_bytes: Optional[bytes] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Any:
     """Module-level function (picklable) — runs generate_voxels and calls back progress."""
 
@@ -176,6 +180,10 @@ def _run_generate_sync(
         rng_seed=rng_seed,
         progress_callback=progress_callback,
         optimizer_algo=optimizer_algo,
+        image_top_bytes=top_bytes,
+        w_f1_front=w_f1_front,
+        w_f1_top=w_f1_top,
+        w_f1_side=w_f1_side,
     )
 
 
@@ -210,6 +218,10 @@ async def _run_generate_job(job_id: str, params: Dict[str, Any]) -> None:
             params["rng_seed"],
             params["optimizer_algo"],
             job_id,
+            params.get("top_bytes"),
+            params.get("w_f1_front", 1.0),
+            params.get("w_f1_top", 1.0),
+            params.get("w_f1_side", 1.0),
         )
         jobs[job_id]["result"] = {
             "size": result.size,
@@ -218,14 +230,19 @@ async def _run_generate_job(job_id: str, params: Dict[str, Any]) -> None:
             "points": result.points,
             "projection_front": result.projection_front,
             "projection_side": result.projection_side,
+            "projection_top": result.projection_top,
             "threshold_front": result.threshold_front,
             "threshold_side": result.threshold_side,
+            "threshold_top": result.threshold_top,
             "invert_front": result.invert_front,
             "invert_side": result.invert_side,
+            "invert_top": result.invert_top,
             "mask_front": result.mask_front,
             "mask_side": result.mask_side,
+            "mask_top": result.mask_top,
             "f1_front": result.f1_front,
             "f1_side": result.f1_side,
+            "f1_top": result.f1_top,
             "f1_total": result.f1_total,
             "chaos": result.chaos,
             "objective": result.objective,
@@ -233,7 +250,7 @@ async def _run_generate_job(job_id: str, params: Dict[str, Any]) -> None:
         }
         jobs[job_id]["status"] = "completed"
         _set_job_progress(job_id, 1.0, "生成完成，可以加载结果")
-        print(f"{_job_prefix(job_id)} completed count={result.count} full={result.count_full} f1={result.f1_total:.4f} chaos={result.chaos:.4f}")
+        print(f"{_job_prefix(job_id)} completed count={result.count} full={result.count_full} f1={result.f1_total:.4f} chaos={result.chaos:.4f} use_3d={result.projection_top is not None}")
     except Exception as exc:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(exc)
@@ -266,12 +283,18 @@ async def api_generate(
     weight_volume: float = Form(0.10),
     rng_seed: int = Form(42),
     optimizer_algo: str = Form("fast"),
+    image_top: Optional[UploadFile] = File(None),
+    w_f1_front: float = Form(1.0),
+    w_f1_top: float = Form(1.0),
+    w_f1_side: float = Form(1.0),
 ):
     _cleanup_jobs()
 
     front_bytes = await image_front.read()
     side_bytes = await image_side.read()
-    print(f"[DEBUG] /api/generate received: front_size={len(front_bytes)} side_size={len(side_bytes)} size={size} density={density} chaos_penalty={chaos_penalty} min_f1={min_f1} sa_steps={sa_steps} optimize={optimize} optimizer_algo={optimizer_algo}")
+    top_bytes = await image_top.read() if image_top is not None else None
+    has_top = top_bytes is not None and len(top_bytes) > 0
+    print(f"[DEBUG] /api/generate received: front_size={len(front_bytes)} side_size={len(side_bytes)} top_size={len(top_bytes) if top_bytes else 0} size={size} density={density} chaos_penalty={chaos_penalty} min_f1={min_f1} sa_steps={sa_steps} optimize={optimize} optimizer_algo={optimizer_algo} w_f1=({w_f1_front},{w_f1_top},{w_f1_side})")
 
     threshold_val: Optional[int] = None
     if not auto_threshold and threshold.strip().isdigit():
@@ -304,6 +327,7 @@ async def api_generate(
             {
                 "front_bytes": front_bytes,
                 "side_bytes": side_bytes,
+                "top_bytes": top_bytes if has_top else None,
                 "size": size,
                 "threshold_val": threshold_val,
                 "invert_val": invert_val,
@@ -323,6 +347,9 @@ async def api_generate(
                 "weight_volume": weight_volume,
                 "rng_seed": rng_seed,
                 "optimizer_algo": optimizer_algo,
+                "w_f1_front": w_f1_front,
+                "w_f1_top": w_f1_top,
+                "w_f1_side": w_f1_side,
             },
         )
     )

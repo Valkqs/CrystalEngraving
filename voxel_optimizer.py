@@ -37,12 +37,34 @@ def _dice(a: np.ndarray, b: np.ndarray) -> float:
     return 1.0 if total < 1e-9 else 2.0 * inter / total
 
 
-def _f1_score(voxels: np.ndarray, target_front: np.ndarray, target_side: np.ndarray) -> Tuple[float, float, float]:
+def _f1_score(
+    voxels: np.ndarray,
+    target_front: np.ndarray,
+    target_side: np.ndarray,
+    target_top: Optional[np.ndarray] = None,
+    w_front: float = 1.0,
+    w_top: float = 1.0,
+    w_side: float = 1.0,
+) -> Tuple[float, float, float, float]:
+    """Compute per-direction Dice F1 and a weighted total.
+
+    target_top is optional — when None, behaves like the 2-direction version.
+    top-down projection: np.any(voxels, axis=1) gives an (X, Z) image.
+    """
     proj_front = np.any(voxels, axis=2)
     proj_side = np.any(voxels, axis=0).T
     f1_f = _dice(proj_front, target_front)
     f1_s = _dice(proj_side, target_side)
-    return f1_f, f1_s, (f1_f + f1_s) * 0.5
+    if target_top is not None:
+        proj_top = np.any(voxels, axis=1)  # (X, Z) — matches target_top shape
+        f1_t_dir = _dice(proj_top, target_top)
+        w_sum = max(1e-9, w_front + w_top + w_side)
+        f1_total = (w_front * f1_f + w_top * f1_t_dir + w_side * f1_s) / w_sum
+        return f1_f, f1_s, f1_t_dir, f1_total
+    else:
+        w_sum = max(1e-9, w_front + w_side)
+        f1_total = (w_front * f1_f + w_side * f1_s) / w_sum
+        return f1_f, f1_s, 0.0, f1_total
 
 
 def _chaos(voxels: np.ndarray) -> float:
@@ -72,8 +94,15 @@ def _objective(
     target_side: np.ndarray,
     w_chaos: float,
     w_volume: float,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple[float, float, float, float, float]:
-    f1_f, f1_s, f1_t = _f1_score(voxels, target_front, target_side)
+    f1_f, f1_s, f1_t_dir, f1_t = _f1_score(
+        voxels, target_front, target_side, target_top,
+        w_f1_front, w_f1_top, w_f1_side,
+    )
     chaos_val = _chaos(voxels)
     vol_ratio = float(voxels.sum()) / float(voxels.size)
     obj = f1_t + w_chaos * (1.0 / (1.0 + chaos_val)) - w_volume * vol_ratio
@@ -96,6 +125,10 @@ def _sa_chain(
     sa_steps: int,
     rng_seed: int,
     progress_queue: Optional[Queue] = None,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple[np.ndarray, float, float, float, float, float, int]:
     """Run one SA chain; pushes progress into progress_queue; returns best result."""
     rng = np.random.default_rng(rng_seed)
@@ -113,7 +146,8 @@ def _sa_chain(
 
     best_voxels = voxels.copy()
     best_obj, best_f1_f, best_f1_s, best_f1_t, best_chaos = _objective(
-        voxels, target_front, target_side, w_chaos, w_volume
+        voxels, target_front, target_side, w_chaos, w_volume,
+        target_top, w_f1_front, w_f1_top, w_f1_side,
     )
     current_obj = best_obj
 
@@ -161,7 +195,10 @@ def _sa_chain(
                 nx = rng.integers(size)
                 ny = rng.integers(size)
                 nz = rng.integers(size)
-                if not voxels[ny, nx, nz] and (target_front[ny, nx] or target_side[nz, nx]):
+                covers = target_front[ny, nx] or target_side[nz, nx]
+                if not covers and target_top is not None:
+                    covers = bool(target_top[nx, nz])
+                if not voxels[ny, nx, nz] and covers:
                     voxels[ny, nx, nz] = True
                     coords = np.vstack([coords, [ny, nx, nz]])
                     ys = np.append(ys, ny)
@@ -173,14 +210,16 @@ def _sa_chain(
             # Only compute chaos + full objective every N_STEPS_SLOW steps
             if global_step % N_STEPS_SLOW == 0:
                 new_obj, new_f1_f, new_f1_s, new_f1_t, new_chaos = _objective(
-                    voxels, target_front, target_side, w_chaos, w_volume
+                    voxels, target_front, target_side, w_chaos, w_volume,
+                    target_top, w_f1_front, w_f1_top, w_f1_side,
                 )
                 last_chaos = new_chaos
                 last_obj = new_obj
             else:
                 # cheap f1 only
                 new_obj, new_f1_f, new_f1_s, new_f1_t, _ = _objective(
-                    voxels, target_front, target_side, w_chaos, w_volume
+                    voxels, target_front, target_side, w_chaos, w_volume,
+                    target_top, w_f1_front, w_f1_top, w_f1_side,
                 )
                 new_chaos = last_chaos
 
@@ -243,6 +282,10 @@ def optimize_voxels(
     verbose: bool = False,
     progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None,
     use_fast: bool = True,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple[
     np.ndarray,
     float,
@@ -259,6 +302,9 @@ def optimize_voxels(
     Progress_callback receives 0.0-1.0 based on completed chains.
     Set use_fast=True (default) for gradient-descent + greedy + local-search
     (10-50x faster). Set use_fast=False to fall back to pure SA.
+
+    Optional target_top (X, Z mask) enables 3-direction optimization.
+    w_f1_front / w_f1_top / w_f1_side weight the three F1 contributions.
     """
     if use_fast:
         return optimize_voxels_fast(
@@ -274,6 +320,10 @@ def optimize_voxels(
             weight_volume=weight_volume,
             verbose=verbose,
             progress_callback=progress_callback,
+            target_top=target_top,
+            w_f1_front=w_f1_front,
+            w_f1_top=w_f1_top,
+            w_f1_side=w_f1_side,
         )
     size = target_front.shape[0]
     w_chaos = float(chaos_penalty)
@@ -317,6 +367,10 @@ def optimize_voxels(
                 steps_per_chain,
                 seed,
                 queues[cid],
+                target_top,
+                w_f1_front,
+                w_f1_top,
+                w_f1_side,
             )
             futures[fut] = cid
 
@@ -409,6 +463,10 @@ def optimize_voxels(
         "num_chains": num_chains,
         "steps_per_chain": steps_per_chain,
         "elapsed_s": round(elapsed, 2),
+        "w_f1_front": w_f1_front,
+        "w_f1_top": w_f1_top,
+        "w_f1_side": w_f1_side,
+        "use_3d": target_top is not None,
     }
     return (
         best_voxels,
@@ -439,12 +497,23 @@ def _soft_dice_objective(
     ts: np.ndarray,
     w_chaos: float,
     w_vol: float,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> float:
     S_f = np.any(p, axis=2)
     S_s = np.any(p, axis=0).T
     dice_f = _soft_dice_f1(S_f, tf)
     dice_s = _soft_dice_f1(S_s, ts)
-    f1_t = (dice_f + dice_s) * 0.5
+    if target_top is not None:
+        S_t = np.any(p, axis=1)
+        dice_t = _soft_dice_f1(S_t, target_top)
+        w_sum = max(1e-9, w_f1_front + w_f1_top + w_f1_side)
+        f1_t = (w_f1_front * dice_f + w_f1_top * dice_t + w_f1_side * dice_s) / w_sum
+    else:
+        w_sum = max(1e-9, w_f1_front + w_f1_side)
+        f1_t = (w_f1_front * dice_f + w_f1_side * dice_s) / w_sum
 
     vol = float(p.sum()) / float(p.size)
     obj = f1_t - w_chaos * vol - w_vol * vol
@@ -522,6 +591,10 @@ def _column_greedy(
     rng: np.random.Generator,
     max_iters: int = 2000,
     progress_queue=None,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> np.ndarray:
     """Column-level greedy optimization: per-column bin search for p_keep.
 
@@ -531,10 +604,19 @@ def _column_greedy(
     size = target_front.shape[0]
     p = init_voxels.astype(np.float64)
 
+    has_top = target_top is not None
+    w_sum = max(1e-9, (w_f1_front + w_f1_top + w_f1_side) if has_top else (w_f1_front + w_f1_side))
+
     def eval_f1() -> float:
         Sf = np.any(p > 0.5, axis=2)
         Ss = np.any(p > 0.5, axis=0).T
-        return (_soft_dice_f1(Sf, target_front) + _soft_dice_f1(Ss, target_side)) * 0.5
+        df = _soft_dice_f1(Sf, target_front)
+        ds = _soft_dice_f1(Ss, target_side)
+        if has_top:
+            St = np.any(p > 0.5, axis=1)
+            dt = _soft_dice_f1(St, target_top)
+            return (w_f1_front * df + w_f1_top * dt + w_f1_side * ds) / w_sum
+        return (w_f1_front * df + w_f1_side * ds) / w_sum
 
     def column_f1_contribution(
         col_mask: np.ndarray,
@@ -615,6 +697,10 @@ def _local_search_refine(
     w_vol: float,
     rng: np.random.Generator,
     max_flips: int = 500,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> np.ndarray:
     """Quick binary local search: flip voxels that improve F1.
 
@@ -624,9 +710,10 @@ def _local_search_refine(
     best = voxels.copy()
     coords = list(zip(*np.where(best)))
 
-    best_obj = _soft_dice_objective(best, target_front, target_side, w_chaos, w_vol)
-    best_f1 = (_soft_dice_f1(np.any(best, 2), target_front) +
-               _soft_dice_f1(np.any(best, 2), target_side).T) * 0.5
+    best_obj = _soft_dice_objective(
+        best, target_front, target_side, w_chaos, w_vol,
+        target_top, w_f1_front, w_f1_top, w_f1_side,
+    )
 
     improved = True
     flips = 0
@@ -638,7 +725,10 @@ def _local_search_refine(
                 break
 
             best[y, x, z] = not best[y, x, z]
-            new_obj = _soft_dice_objective(best, target_front, target_side, w_chaos, w_vol)
+            new_obj = _soft_dice_objective(
+                best, target_front, target_side, w_chaos, w_vol,
+                target_top, w_f1_front, w_f1_top, w_f1_side,
+            )
 
             if new_obj > best_obj:
                 best_obj = new_obj
@@ -662,6 +752,10 @@ def _run_single_start(
     max_gd_iters: int,
     max_greedy_iters: int,
     max_flips: int,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple[np.ndarray, float, float, float, float]:
     """Run one optimization start. Designed to be called inside a worker process."""
     rng = np.random.default_rng(rng_seed)
@@ -684,17 +778,28 @@ def _run_single_start(
     greedy_voxels = _column_greedy(
         target_front, target_side, gd_voxels, w_chaos, w_vol, density,
         rng, max_iters=max_greedy_iters, progress_queue=None,
+        target_top=target_top, w_f1_front=w_f1_front, w_f1_top=w_f1_top, w_f1_side=w_f1_side,
     )
 
     refined = _local_search_refine(
         greedy_voxels, target_front, target_side, w_chaos, w_vol,
         rng, max_flips=max_flips,
+        target_top=target_top, w_f1_front=w_f1_front, w_f1_top=w_f1_top, w_f1_side=w_f1_side,
     )
 
     f1_f = _soft_dice_f1(np.any(refined, axis=2), target_front)
     f1_s = _soft_dice_f1(np.any(refined, axis=0).T, target_side)
-    f1_t = (f1_f + f1_s) * 0.5
-    obj = _soft_dice_objective(refined, target_front, target_side, w_chaos, w_vol)
+    if target_top is not None:
+        f1_t_dir = _soft_dice_f1(np.any(refined, axis=1), target_top)
+        w_sum = max(1e-9, w_f1_front + w_f1_top + w_f1_side)
+        f1_t = (w_f1_front * f1_f + w_f1_top * f1_t_dir + w_f1_side * f1_s) / w_sum
+    else:
+        w_sum = max(1e-9, w_f1_front + w_f1_side)
+        f1_t = (w_f1_front * f1_f + w_f1_side * f1_s) / w_sum
+    obj = _soft_dice_objective(
+        refined, target_front, target_side, w_chaos, w_vol,
+        target_top, w_f1_front, w_f1_top, w_f1_side,
+    )
     return refined, f1_f, f1_s, f1_t, obj
 
 
@@ -711,11 +816,17 @@ def optimize_voxels_fast(
     weight_volume: float = 0.10,
     verbose: bool = False,
     progress_callback=None,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple:
     """Fast multi-phase optimizer: parallel multi-start GD + greedy + local-search.
 
     Runs all optimization starts in parallel using ProcessPoolExecutor.
     10-50x faster than pure SA while achieving equal or better results.
+
+    Optional target_top (X, Z mask) enables 3-direction optimization.
     """
     size = target_front.shape[0]
     w_chaos = float(chaos_penalty)
@@ -733,7 +844,7 @@ def optimize_voxels_fast(
     num_starts = min(os.cpu_count() or 4, 128)
     max_workers = min(num_starts, os.cpu_count() or 4)
 
-    report(0.05, f"启动 {num_starts} 核并行快速优化")
+    report(0.05, f"启动 {num_starts} 核并行快速优化" + (" (3D 三方向)" if target_top is not None else ""))
 
     # Tune iteration counts based on step budget
     max_gd_iters = max(40, int(sa_steps / 300))
@@ -743,7 +854,8 @@ def optimize_voxels_fast(
     args_list = [
         (si, target_front.copy(), target_side.copy(), density, uniform_strength,
          w_chaos, w_vol, base_seed + si * 31337 + si * si,
-         max_gd_iters, max_greedy_iters, max_flips)
+         max_gd_iters, max_greedy_iters, max_flips,
+         target_top, w_f1_front, w_f1_top, w_f1_side)
         for si in range(num_starts)
     ]
 
@@ -804,6 +916,10 @@ def optimize_voxels_fast(
         "num_chains": num_starts,
         "elapsed_s": round(elapsed, 2),
         "method": "parallel_gd_greedy_local",
+        "w_f1_front": w_f1_front,
+        "w_f1_top": w_f1_top,
+        "w_f1_side": w_f1_side,
+        "use_3d": target_top is not None,
     }
     return (
         best_voxels,
@@ -841,6 +957,7 @@ def _ga_crossover(
     target_side: np.ndarray,
     rng: np.random.Generator,
     cross_rate: float = 0.5,
+    target_top: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Uniform crossover: randomly take voxels from each parent, then repair."""
     child = np.where(
@@ -849,7 +966,7 @@ def _ga_crossover(
         parent_b,
     ).astype(bool)
 
-    child = _ga_repair(child, target_front, target_side, rng)
+    child = _ga_repair(child, target_front, target_side, rng, target_top)
     return child
 
 
@@ -858,8 +975,9 @@ def _ga_repair(
     target_front: np.ndarray,
     target_side: np.ndarray,
     rng: np.random.Generator,
+    target_top: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Ensure voxels maintain both projections coverage."""
+    """Ensure voxels maintain all active projections coverage."""
     size = voxels.shape[0]
     for y in range(size):
         for x in range(size):
@@ -877,6 +995,15 @@ def _ga_repair(
                     y = int(rng.choice(y_cands))
                     voxels[y, x, z] = True
 
+    if target_top is not None:
+        for x in range(size):
+            for z in range(size):
+                if target_top[x, z] and not np.any(voxels[:, x, z]):
+                    y_cands = np.where(target_front[:, x])[0]
+                    if y_cands.size > 0:
+                        y = int(rng.choice(y_cands))
+                        voxels[y, x, z] = True
+
     return voxels
 
 
@@ -886,6 +1013,7 @@ def _ga_mutate(
     target_side: np.ndarray,
     rng: np.random.Generator,
     mut_rate: float = 0.1,
+    target_top: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Apply random voxel mutations (add/remove/move), same ops as SA."""
     size = voxels.shape[0]
@@ -918,7 +1046,10 @@ def _ga_mutate(
 
         else:
             nx, ny, nz = rng.integers(size), rng.integers(size), rng.integers(size)
-            if not voxels[ny, nx, nz] and (target_front[ny, nx] or target_side[nz, nx]):
+            covers = target_front[ny, nx] or target_side[nz, nx]
+            if not covers and target_top is not None:
+                covers = bool(target_top[nx, nz])
+            if not voxels[ny, nx, nz] and covers:
                 voxels[ny, nx, nz] = True
                 coords = np.vstack([coords, [ny, nx, nz]])
                 n_voxels += 1
@@ -952,9 +1083,16 @@ def _ga_fitness(
     target_side: np.ndarray,
     w_chaos: float,
     w_volume: float,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple[float, float, float, float, float]:
     """Evaluate an individual: same as SA objective."""
-    return _objective(voxels, target_front, target_side, w_chaos, w_volume)
+    return _objective(
+        voxels, target_front, target_side, w_chaos, w_volume,
+        target_top, w_f1_front, w_f1_top, w_f1_side,
+    )
 
 
 def _ga_chain(
@@ -973,6 +1111,10 @@ def _ga_chain(
     cross_rate: float,
     rng_seed: int,
     progress_queue: Optional[Queue] = None,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple[np.ndarray, float, float, float, float, float, int]:
     """Run one GA chain; returns best individual found."""
     rng = np.random.default_rng(rng_seed)
@@ -980,7 +1122,10 @@ def _ga_chain(
     population: List[Tuple[np.ndarray, float, float, float, float]] = []
     for _ in range(pop_size):
         ind = _ga_init_individual(target_front, target_side, density, uniform_strength, rng)
-        fitness = _ga_fitness(ind, target_front, target_side, w_chaos, w_volume)
+        fitness = _ga_fitness(
+            ind, target_front, target_side, w_chaos, w_volume,
+            target_top, w_f1_front, w_f1_top, w_f1_side,
+        )
         population.append((ind, *fitness))
 
     best_idx = max(range(len(population)), key=lambda i: population[i][4])
@@ -997,12 +1142,13 @@ def _ga_chain(
             p2 = _ga_tournament_select(population, rng, k=3)
 
             child = _ga_crossover(
-                p1[0], p2[0], target_front, target_side, rng, cross_rate
+                p1[0], p2[0], target_front, target_side, rng, cross_rate, target_top
             )
-            child = _ga_mutate(child, target_front, target_side, rng, mut_rate)
+            child = _ga_mutate(child, target_front, target_side, rng, mut_rate, target_top)
 
             f1_f, f1_s, f1_t, chaos_val, obj_val = _ga_fitness(
-                child, target_front, target_side, w_chaos, w_volume
+                child, target_front, target_side, w_chaos, w_volume,
+                target_top, w_f1_front, w_f1_top, w_f1_side,
             )
 
             if f1_t < min_f1_thresh:
@@ -1051,11 +1197,17 @@ def optimize_voxels_ga(
     weight_volume: float = 0.10,
     verbose: bool = False,
     progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None,
+    target_top: Optional[np.ndarray] = None,
+    w_f1_front: float = 1.0,
+    w_f1_top: float = 1.0,
+    w_f1_side: float = 1.0,
 ) -> Tuple:
     """Genetic Algorithm voxel optimizer, runs in parallel across CPU cores.
 
     Each chain runs an independent GA with tournament selection, uniform crossover,
     and voxel-level mutation. Best individual across all chains is returned.
+
+    Optional target_top (X, Z mask) enables 3-direction optimization.
     """
     size = target_front.shape[0]
     w_chaos = float(chaos_penalty)
@@ -1074,7 +1226,8 @@ def optimize_voxels_ga(
         if progress_callback is not None:
             progress_callback(p, stage, detail)
 
-    report(0.01, f"启动 GA ({num_chains} 条链, 每链 pop={pop_size}, {ga_generations} 代)")
+    report(0.01, f"启动 GA ({num_chains} 条链, 每链 pop={pop_size}, {ga_generations} 代)"
+           + (" (3D 三方向)" if target_top is not None else ""))
 
     base_seed = int(rng_seed)
     chain_seeds = [base_seed + i * 17 + i * i for i in range(num_chains)]
@@ -1106,6 +1259,10 @@ def optimize_voxels_ga(
                 cross_rate,
                 seed,
                 queues[cid],
+                target_top,
+                w_f1_front,
+                w_f1_top,
+                w_f1_side,
             )
             futures[fut] = cid
 
@@ -1187,6 +1344,10 @@ def optimize_voxels_ga(
         "generations": ga_generations,
         "elapsed_s": round(elapsed, 2),
         "method": "ga",
+        "w_f1_front": w_f1_front,
+        "w_f1_top": w_f1_top,
+        "w_f1_side": w_f1_side,
+        "use_3d": target_top is not None,
     }
     return (
         best_voxels,

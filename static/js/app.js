@@ -16,8 +16,19 @@ console.log = (...args) => {
 const canvasHost = document.getElementById("canvasHost");
 const imageFrontInput = document.getElementById("imageFront");
 const imageSideInput = document.getElementById("imageSide");
+const imageTopInput = document.getElementById("imageTop");
 const previewFront = document.getElementById("previewFront");
 const previewSide = document.getElementById("previewSide");
+const previewTop = document.getElementById("previewTop");
+const topWeightsSection = document.getElementById("topWeightsSection");
+const wF1FrontInput = document.getElementById("wF1Front");
+const wF1TopInput = document.getElementById("wF1Top");
+const wF1SideInput = document.getElementById("wF1Side");
+const wF1FrontValue = document.getElementById("wF1FrontValue");
+const wF1TopValue = document.getElementById("wF1TopValue");
+const wF1SideValue = document.getElementById("wF1SideValue");
+const projTopCanvas = document.getElementById("projTop");
+const projTopContainer = document.getElementById("projTopContainer");
 const generateBtn = document.getElementById("generateBtn");
 const previewBtn = document.getElementById("previewBtn");
 const statusEl = document.getElementById("status");
@@ -73,6 +84,7 @@ const exportInfoEl = document.getElementById("exportInfo");
 
 let frontFile = null;
 let sideFile = null;
+let topFile = null;
 let currentJobId = null;
 let lastPreviewParams = null;
 
@@ -295,6 +307,32 @@ setupUpload(imageFrontInput, previewFront, imageFrontInput.closest(".upload-card
 setupUpload(imageSideInput, previewSide, imageSideInput.closest(".upload-card"), (f) => {
   sideFile = f;
 });
+if (imageTopInput) {
+  setupUpload(imageTopInput, previewTop, imageTopInput.closest(".upload-card"), (f) => {
+    topFile = f;
+    if (topWeightsSection) topWeightsSection.style.display = "";
+    updateGenerateState();
+  });
+  imageTopInput.addEventListener("change", () => {
+    if (!imageTopInput.files || imageTopInput.files.length === 0) {
+      topFile = null;
+      if (topWeightsSection) topWeightsSection.style.display = "none";
+      if (projTopContainer) projTopContainer.style.display = "none";
+      updateGenerateState();
+    }
+  });
+}
+
+function bindWeightSlider(input, valueEl, divider) {
+  if (!input || !valueEl) return;
+  input.addEventListener("input", () => {
+    const raw = parseInt(input.value, 10);
+    valueEl.textContent = String(divider ? Math.round(raw) : raw);
+  });
+}
+bindWeightSlider(wF1FrontInput, wF1FrontValue);
+bindWeightSlider(wF1TopInput, wF1TopValue);
+bindWeightSlider(wF1SideInput, wF1SideValue);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -609,6 +647,12 @@ generateBtn.addEventListener("click", async () => {
     form.append("weight_volume", String(weightVolume));
     form.append("rng_seed", String(rngSeed));
     form.append("optimizer_algo", optimizerAlgo);
+    if (topFile) {
+      form.append("image_top", topFile);
+      form.append("w_f1_front", String((parseInt(wF1FrontInput.value, 10) / 100).toFixed(2)));
+      form.append("w_f1_top", String((parseInt(wF1TopInput.value, 10) / 100).toFixed(2)));
+      form.append("w_f1_side", String((parseInt(wF1SideInput.value, 10) / 100).toFixed(2)));
+    }
 
     const submitRes = await fetch("/api/generate", { method: "POST", body: form });
     console.log("[DEBUG] /api/generate response status:", submitRes.status);
@@ -652,10 +696,12 @@ generateBtn.addEventListener("click", async () => {
       const f1 = (data.f1_total * 100).toFixed(1);
       const f1f = (data.f1_front * 100).toFixed(1);
       const f1s = (data.f1_side * 100).toFixed(1);
+      const f1t = (data.f1_top || 0) * 100;
+      const f1tStr = data.projection_top ? ` / 俯视${f1t.toFixed(1)}%` : "";
       const chaos = data.chaos != null ? ` 混乱度=${(data.chaos * 100).toFixed(1)}%` : "";
       const obj = data.objective != null ? ` obj=${(data.objective * 100).toFixed(1)}%` : "";
       const badge = data.f1_total >= 0.999 ? "✓" : data.f1_total >= 0.9 ? "△" : "✗";
-      f1ScoreEl.textContent = `${badge} F1=${f1}%（正视${f1f}% / 侧视${f1s}%）${obj}${chaos}`;
+      f1ScoreEl.textContent = `${badge} F1=${f1}%（正视${f1f}% / 侧视${f1s}%${f1tStr}）${obj}${chaos}`;
     } else {
       f1ScoreEl.style.display = "none";
     }
@@ -665,6 +711,12 @@ generateBtn.addEventListener("click", async () => {
     updateThresholdDiagnostics(data, autoThreshold);
     drawProjection(projFrontCanvas, data.projection_front);
     drawProjection(projSideCanvas, data.projection_side);
+    if (data.projection_top && projTopCanvas && projTopContainer) {
+      projTopContainer.style.display = "";
+      drawProjection(projTopCanvas, data.projection_top);
+    } else if (projTopContainer) {
+      projTopContainer.style.display = "none";
+    }
 
     const tInfo =
       data.threshold_front != null
