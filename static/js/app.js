@@ -67,6 +67,8 @@ const diagFrontEl = document.getElementById("diagFront");
 const diagSideEl = document.getElementById("diagSide");
 const exportSection = document.getElementById("exportSection");
 const downloadPlyBtn = document.getElementById("downloadPlyBtn");
+const downloadStlBtn = document.getElementById("downloadStlBtn");
+const downloadObjBtn = document.getElementById("downloadObjBtn");
 const exportInfoEl = document.getElementById("exportInfo");
 
 let frontFile = null;
@@ -496,6 +498,38 @@ autoRotateInput.addEventListener("change", () => {
   controls.autoRotate = autoRotateInput.checked;
   controls.autoRotateSpeed = 1.2;
 });
+
+function setupDownloadButton(btn, format) {
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    if (!currentJobId) return;
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = "正在生成…";
+    try {
+      const res = await fetch(`/api/export/${currentJobId}/${format}`);
+      if (!res.ok) throw new Error(`/api/export returned ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `crystal_${currentJobId.slice(0, 8)}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
+}
+
+setupDownloadButton(downloadPlyBtn, "ply");
+setupDownloadButton(downloadStlBtn, "stl");
+setupDownloadButton(downloadObjBtn, "obj");
 
 downloadPlyBtn.addEventListener("click", async () => {
   if (!currentJobId) return;

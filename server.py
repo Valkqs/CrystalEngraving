@@ -21,6 +21,7 @@ from PIL import Image
 
 from voxel import generate_voxels
 from image_preprocess import extract_mask, load_grayscale_fit
+from mesh_export import build_mesh, to_binary_stl, to_obj_text
 import numpy as np
 
 app = FastAPI(title="Crystal Voxel Engraving")
@@ -503,6 +504,65 @@ async def api_export_ply(job_id: str):
         media_type="model/ply",
         headers={"Content-Disposition": f"attachment; filename=crystal_{job_id[:8]}.ply"},
     )
+
+
+def _build_mesh_response(job: Dict[str, Any], fmt: str):
+    """Common mesh build + serialize for STL/OBJ."""
+    result = job.get("result")
+    if not result:
+        raise HTTPException(status_code=404, detail="result not ready")
+
+    points = result.get("points", [])
+    size = int(result.get("size", 192))
+
+    mesh = build_mesh(points, size)
+    vertices = mesh["vertices"]
+    triangles = mesh["triangles"]
+
+    # Center the mesh around origin for nicer CAD viewing
+    if len(vertices) > 0:
+        half = size / 2.0
+        vertices = vertices - np.float32(half)
+
+    if fmt == "stl":
+        body = to_binary_stl(vertices, triangles)
+        media_type = "model/stl"
+        ext = "stl"
+    else:  # obj
+        body = to_obj_text(vertices, triangles)
+        media_type = "model/obj"
+        ext = "obj"
+
+    from starlette.responses import Response
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename=crystal_{job_id_short(job_id)}.{ext}"},
+    )
+
+
+def job_id_short(job_id: str) -> str:
+    return job_id[:8]
+
+
+@app.get("/api/export/{job_id}/stl")
+async def api_export_stl(job_id: str):
+    """Export voxel mesh as binary STL (for 3D printing / CAD)."""
+    _cleanup_jobs()
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _build_mesh_response(job, "stl")
+
+
+@app.get("/api/export/{job_id}/obj")
+async def api_export_obj(job_id: str):
+    """Export voxel mesh as ASCII OBJ (for general 3D tools)."""
+    _cleanup_jobs()
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _build_mesh_response(job, "obj")
 
 
 if __name__ == "__main__":
